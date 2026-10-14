@@ -1,0 +1,21 @@
+# Обновление сервера: Actions → «Деплой на сервер» → Run workflow.
+# Нужны секреты репозитория: SSH_HOST, SSH_USER, SSH_KEY (приватный ключ), APP_DIR (например /opt/seafood-bot).
+name: Деплой на сервер
+on:
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -e
+            cd ${{ secrets.APP_DIR }}
+            git pull --ff-only
+            docker compose up -d --build
+            sleep 3
+            docker compose ps

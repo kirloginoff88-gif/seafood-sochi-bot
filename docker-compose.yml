@@ -1,0 +1,17 @@
+# Бот + Caddy (сам получает HTTPS-сертификат Let's Encrypt для DOMAIN из .env)
+services:
+  bot:
+    build: .
+    env_file: .env
+    volumes:
+      - ./storage:/data
+    restart: unless-stopped
+  caddy:
+    image: caddy:2-alpine
+    ports: ["80:80", "443:443"]
+    command: caddy reverse-proxy --from ${DOMAIN:?Укажите DOMAIN в .env} --to bot:8080
+    volumes:
+      - caddy_data:/data
+    restart: unless-stopped
+volumes:
+  caddy_data:
