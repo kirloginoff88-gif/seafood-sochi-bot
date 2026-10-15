@@ -449,7 +449,7 @@ function renderConn(st){
   if(!st){ el.innerHTML='<h3>Подключение</h3><p class="muted">Проверяем…</p>'; return; }
   el.innerHTML='<h3>Подключение</h3><div class="bot">'+botLine('Telegram',st.tg)+botLine('MAX',st.max)+
     '<span class="muted">Адрес</span><span>'+(st.publicUrl?'<a href="'+esc(st.publicUrl)+'/app/?p=web" target="_blank" rel="noopener">'+esc(st.publicUrl)+'</a>':'не задан')+'</span>'+
-    '<span class="muted">Хранилище</span><span>'+(st.storage==='redis'?'Redis (Upstash)':'файл на сервере')+'</span></div>'+
+    '<span class="muted">Хранилище</span><span>'+(st.storage==='redis'?'Redis (Upstash)':(st.serverless?'<b style="color:var(--coral)">не подключено — подключите Upstash в Vercel: Storage → Upstash, иначе заказы и правки пропадут</b>':'файл на сервере'))+'</span></div>'+
     '<div class="acts"><button class="btn sm" type="button" data-connect>Подключить ботов</button>'+
     (st.externalImages?'<button class="btn ghost sm" type="button" data-import>Перенести фото к себе ('+st.externalImages+')</button>':'')+'</div>'+
     '<p class="muted">«Подключить ботов» привязывает Telegram и MAX к этому адресу и ставит кнопку «Магазин». Нажмите после первого запуска и после смены токена.'+(st.externalImages?' Сейчас '+st.externalImages+' фото берутся по ссылкам с сайта — перенесите их, чтобы магазин не зависел от сайта.':'')+'</p>';

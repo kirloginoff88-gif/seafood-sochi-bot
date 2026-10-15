@@ -24,7 +24,8 @@ const config = {
   publicUrl: (env('PUBLIC_URL') || (env('VERCEL_PROJECT_PRODUCTION_URL') ? 'https://' + env('VERCEL_PROJECT_PRODUCTION_URL') : '')).replace(/\/$/, ''),
   serverless: !!env('VERCEL'),
   // Рабочие данные: каталог, фото, заказы. В git не попадают.
-  dataDir: path.resolve(ROOT, env('DATA_DIR', 'storage')),
+  // На Vercel диск только для чтения: без Redis пишем во временную папку (данные не сохранятся надолго)
+  dataDir: path.resolve(ROOT, env('DATA_DIR', env('VERCEL') ? require('os').tmpdir() + '/seafood' : 'storage')),
 
   telegram: {
     token: env('TG_TOKEN'),
