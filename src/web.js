@@ -10,6 +10,20 @@ function json(res, code, obj, headers = {}) {
 }
 
 function readBody(req, limit = 100 * 1024) {
+  // На Vercel тело уже прочитано платформой и лежит в req.body
+  if ('body' in req) {
+    return new Promise((resolve, reject) => {
+      try {
+        let b = req.body;
+        if (b === undefined || b === null || b === '') return resolve({});
+        if (Buffer.isBuffer(b)) b = b.toString('utf8');
+        if (typeof b === 'string') { if (b.length > limit * 1.4) return reject(new Error('too large')); b = JSON.parse(b); }
+        if (typeof b !== 'object') return reject(new Error('bad json'));
+        if (JSON.stringify(b).length > limit * 1.4) return reject(new Error('too large'));
+        resolve(b);
+      } catch { reject(new Error('bad json')); }
+    });
+  }
   return new Promise((resolve, reject) => {
     let size = 0; const chunks = [];
     req.on('data', c => { size += c.length; if (size > limit) { reject(new Error('too large')); req.destroy(); } else chunks.push(c); });

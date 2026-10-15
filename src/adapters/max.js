@@ -109,7 +109,7 @@ async function poll() {
   let marker = null;
   while (!stopped) {
     try {
-      const r = await api('GET', '/updates', { timeout: 30, limit: 100, marker: marker ?? undefined, types: 'message_created,message_callback,bot_started' });
+      const r = await api('GET', '/updates', { timeout: 30, limit: 100, marker: marker ?? undefined, types: UPDATES.join(',') });
       for (const up of r.updates || []) await handleUpdate(up);
       if (r.marker !== undefined && r.marker !== null) marker = r.marker;
     } catch (e) {
@@ -119,22 +119,45 @@ async function poll() {
   }
 }
 
+const UPDATES = ['message_created', 'message_callback', 'bot_started'];
+
+// Подключить бота к этому серверу через вебхук (так работает на Vercel)
+async function connect() {
+  if (!config.max.token) throw new Error('MAX_TOKEN не задан');
+  if (!config.publicUrl) throw new Error('Не известен публичный адрес (PUBLIC_URL)');
+  await api('POST', '/subscriptions', null, { url: `${config.publicUrl}/webhook/max`, update_types: UPDATES, secret: config.max.webhookSecret });
+  return status();
+}
+
+async function status() {
+  if (!config.max.token) return { enabled: false };
+  const me = await api('GET', '/me');
+  if (!config.max.botName && me.username) config.max.botName = me.username;
+  const subs = await api('GET', '/subscriptions').catch(() => ({ subscriptions: [] }));
+  const expected = `${config.publicUrl}/webhook/max`;
+  const urls = (subs.subscriptions || []).map(x => x.url);
+  return { enabled: true, username: me.username || me.name || String(me.user_id), link: me.username ? `https://max.ru/${me.username}` : '', webhook: urls.join(', '), connected: urls.includes(expected), botNameSet: !!process.env.MAX_BOT_NAME };
+}
+
+// Запуск на обычном сервере: polling или вебхук
 async function start() {
   if (!config.max.token) return console.log('[max] MAX_TOKEN не задан — MAX выключен');
   const me = await api('GET', '/me');
-  console.log(`[max] бот ${me.username || me.name || me.user_id} запущен (${config.max.mode})`);
   if (!config.max.botName && me.username) config.max.botName = me.username;
   if (config.max.mode === 'webhook') {
-    await api('POST', '/subscriptions', null, { url: `${config.publicUrl}/webhook/max`, update_types: ['message_created', 'message_callback', 'bot_started'], secret: config.max.webhookSecret });
+    await connect();
+    console.log(`[max] бот ${me.username || me.user_id} подключён через вебхук`);
   } else {
+    console.log(`[max] бот ${me.username || me.user_id} запущен (polling)`);
     poll();
   }
 }
 
-function webhook(headers, body) {
+// Вебхук: проверяем секрет и обрабатываем до ответа
+async function webhook(headers, body) {
   if (headers['x-max-bot-api-secret'] !== config.max.webhookSecret) return false;
-  handleUpdate(body);
+  await handleUpdate(body);
   return true;
 }
 
-module.exports = { start, send, edit, handleUpdate, webhook, render, api, phoneFromContact, stop: () => { stopped = true; } };
+module.exports = { start, connect, status, send, edit, handleUpdate, webhook, render, api, phoneFromContact, stop: () => { stopped = true; } };

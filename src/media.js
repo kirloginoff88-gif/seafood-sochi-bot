@@ -1,10 +1,13 @@
-// Фото товаров: сохранение загруженных из админки и раздача по /media/<имя>
+// Фото товаров: сохранение загруженных из админки и раздача по /media/<имя>.
+// На сервере (файловое хранилище) — папка storage/uploads; на Vercel — в Redis (media:<имя>).
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const config = require('./config');
+const db = require('./db');
 
-const MAX_BYTES = 4 * 1024 * 1024;
+const MAX_BYTES = 3 * 1024 * 1024; // Vercel принимает запрос до 4,5 МБ, а base64 раздувает на треть
+const inRedis = db.kind === 'redis';
 
 // Определяем формат по первым байтам — расширению и MIME из браузера не верим
 function sniff(buf) {
@@ -19,24 +22,39 @@ function fromDataUrl(s) {
   return m ? Buffer.from(m[1], 'base64') : null;
 }
 
-// Сохраняет основное фото и миниатюру (<имя>_t.<ext>). Возвращает путь вида /media/xxxx.jpg
-function saveImage(full, thumb) {
+const safeName = urlPath => { const n = path.basename(String(urlPath)); return /^[a-z0-9_-]+\.(jpg|png|webp)$/.test(n) ? n : null; };
+
+async function put(name, buf) {
+  if (inRedis) return db.set(`media:${name}`, buf.toString('base64'));
+  fs.mkdirSync(config.uploadsDir, { recursive: true });
+  fs.writeFileSync(path.join(config.uploadsDir, name), buf);
+}
+
+// Сохраняет фото и миниатюру (<имя>_t.<ext>). Возвращает путь вида /media/xxxx.jpg
+async function saveImage(full, thumb) {
   const ext = sniff(full);
   if (!ext) throw new Error('Поддерживаются фото JPG, PNG и WebP');
-  if (full.length > MAX_BYTES) throw new Error('Фото больше 4 МБ');
-  const thumbExt = thumb ? sniff(thumb) : null;
+  if (full.length > MAX_BYTES) throw new Error('Фото больше 3 МБ');
   const name = crypto.randomBytes(8).toString('hex');
-  fs.mkdirSync(config.uploadsDir, { recursive: true });
-  fs.writeFileSync(path.join(config.uploadsDir, `${name}.${ext}`), full);
+  await put(`${name}.${ext}`, full);
   // у миниатюры то же расширение, что и у основного файла — так её находит thumbOf()
-  fs.writeFileSync(path.join(config.uploadsDir, `${name}_t.${ext}`), thumbExt === ext && thumb.length <= MAX_BYTES ? thumb : full);
+  await put(`${name}_t.${ext}`, thumb && sniff(thumb) === ext && thumb.length <= MAX_BYTES ? thumb : full);
   return `/media/${name}.${ext}`;
 }
 
-function filePath(urlPath) {
-  const name = path.basename(urlPath);
-  if (!/^[a-z0-9_-]+\.(jpg|png|webp)$/.test(name)) return null;
-  return path.join(config.uploadsDir, name);
+async function read(urlPath) {
+  const name = safeName(urlPath);
+  if (!name) return null;
+  if (inRedis) { const b64 = await db.get(`media:${name}`); return b64 ? Buffer.from(b64, 'base64') : null; }
+  try { return fs.readFileSync(path.join(config.uploadsDir, name)); } catch { return null; }
 }
 
-module.exports = { saveImage, fromDataUrl, filePath, sniff, MAX_BYTES };
+async function remove(urlPath) {
+  const name = safeName(urlPath);
+  if (!name) return;
+  const thumb = name.replace(/\.(jpg|png|webp)$/, '_t.$1');
+  if (inRedis) return db.del(`media:${name}`, `media:${thumb}`);
+  for (const n of [name, thumb]) fs.rmSync(path.join(config.uploadsDir, n), { force: true });
+}
+
+module.exports = { saveImage, fromDataUrl, read, remove, sniff, MAX_BYTES };

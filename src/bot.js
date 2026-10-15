@@ -33,7 +33,7 @@ function menuView(u, greet) {
   rows.push(hasSales ? [{ text: '🐟 Каталог', cb: 'cats' }, { text: '🔥 Акции', cb: 'sale' }] : [{ text: '🐟 Каталог', cb: 'cats' }, { text: '🔎 Поиск', cb: 'srch' }]);
   rows.push(hasSales ? [{ text: cartBtnLabel(u), cb: 'cart' }, { text: '🔎 Поиск', cb: 'srch' }] : [{ text: cartBtnLabel(u), cb: 'cart' }]);
   rows.push([{ text: '🚚 Доставка и оплата', cb: 'dl' }, { text: '📞 Менеджер', cb: 'ct' }]);
-  if (store.lastOrders(u.platform, u.userId, 1).length) rows.push([{ text: '📦 Мои заказы', cb: 'my' }]);
+  if ((u.orderIds || []).length) rows.push([{ text: '📦 Мои заказы', cb: 'my' }]);
   return { text, buttons: rows };
 }
 
@@ -149,8 +149,8 @@ function contactView() {
   return { text: `<b>📞 Связь с менеджером</b>\n\nТелефон и WhatsApp: <b>${esc(s.phone_tel || '')}</b>\n${esc(s.hours || '')}\n\nМожно задать вопрос прямо в этом чате — менеджер ответит сюда же.`, buttons: rows };
 }
 
-function myOrdersView(u) {
-  const list = store.lastOrders(u.platform, u.userId, 3);
+async function myOrdersView(u) {
+  const list = await store.ordersByIds((u.orderIds || []).slice(0, 3));
   if (!list.length) return { text: 'Заказов пока нет.', buttons: [[{ text: '🐟 Каталог', cb: 'cats' }]] };
   const text = '<b>📦 Ваши заказы</b>\n\n' + list.map(o => {
     const st = orders.STATUS[o.status] || orders.STATUS.new;
@@ -206,25 +206,51 @@ function startCheckout(u, ev) {
   if (!s.lines.length || (min && s.sum < min)) return cartView(u);
   u.draft = { suggestName: u.profile.name || ev.user.name || '' };
   u.step = 'name';
-  store.touch();
   return checkoutView(u);
 }
 
 function nextStep(u) {
   u.step = STEPS[stepNo(u.step)] || 'confirm';
-  store.touch();
   return checkoutView(u);
 }
 
 // ---------- обработка ----------
-async function handle(ev, ctx) {
-  const u = store.user(ev.platform, ev.user.id);
+// Загружаем покупателя, обрабатываем событие, сохраняем изменения одним разом в конце.
+async function handle(ev, rawCtx) {
+  await catalog.sync();
+  const u = await store.getUser(ev.platform, ev.user.id);
   u.chatId = String(ev.chatId);
   u.name = ev.user.name; u.username = ev.user.username || '';
+  const ctx = wrapCtx(u, rawCtx);
+  try {
+    await route(u, ev, ctx);
+  } finally {
+    await store.saveUser(u);
+  }
+}
 
+// Обычная клавиатура Telegram (запрос номера/геоточки) присылает нажатия текстом.
+// Запоминаем, какой текст какой кнопке соответствует, и снимаем клавиатуру следующим экраном.
+function wrapCtx(u, ctx) {
+  const prep = view => {
+    if (!view) return view;
+    const flat = (view.buttons || []).flat();
+    if (flat.some(b => b.contact || b.location)) {
+      u.replyMap = Object.fromEntries(flat.filter(b => b.cb).map(b => [b.text, b.cb]));
+      u.replyKb = true;
+    } else if (u.replyKb && !flat.length) {
+      view = { ...view, removeKeyboard: true };
+      u.replyKb = false;
+    }
+    return view;
+  };
+  return { reply: v => ctx.reply(prep(v)), edit: v => ctx.edit(prep(v)), toast: t => ctx.toast(t) };
+}
+
+async function route(u, ev, ctx) {
   // Служебные команды менеджера
   if (ev.type === 'text' && /^\/manager\b/i.test(ev.text || '')) return managerCommand(u, ev, ctx);
-  if (store.isManager(ev.platform, ev.chatId)) {
+  if (await store.isManager(ev.platform, ev.chatId)) {
     const done = await managerHandle(u, ev, ctx);
     if (done) return;
   }
@@ -300,41 +326,40 @@ async function onCallback(u, ev, ctx) {
       const cur = u.pick[a] || u.cart[a] || P.firstQty(p);
       let next = b === '+' ? P.inc(p, cur) : P.dec(p, cur);
       if (!next) { next = P.firstQty(p); ctx.toast(`Минимум — ${P.qtyLabel(p, next)}`); }
-      u.pick[a] = next; store.touch();
+      u.pick[a] = next;
       return ctx.edit(cardView(u, +a));
     }
     case 'a': {
       const p = c.byId[+a];
       if (!p || p.out) return ctx.toast('Товар закончился');
       const q = (u.pick && u.pick[a]) || P.firstQty(p);
-      u.cart[a] = P.normQty(p, q); store.touch();
+      u.cart[a] = P.normQty(p, q);
       ctx.toast(`Добавлено: ${P.qtyLabel(p, u.cart[a])}. В корзине ≈ ${P.rub(cartSum(u).sum)}`);
       return ctx.edit(cardView(u, +a));
     }
     case 'cart': return ctx.reply(cartView(u));
-    case 'clr': u.cart = {}; u.pick = {}; store.touch(); return ctx.edit({ text: 'Корзина очищена.', buttons: [[{ text: '🐟 Каталог', cb: 'cats' }]] });
+    case 'clr': u.cart = {}; u.pick = {}; return ctx.edit({ text: 'Корзина очищена.', buttons: [[{ text: '🐟 Каталог', cb: 'cats' }]] });
     case 'dl': return ctx.reply(deliveryView());
     case 'ct': return ctx.reply(contactView());
-    case 'my': return ctx.reply(myOrdersView(u));
-    case 'srch': u.step = 'search'; store.touch(); return ctx.reply({ text: 'Напишите, что ищете — например, <b>креветки</b>, <b>икра</b> или <b>форель</b>.' });
+    case 'my': return ctx.reply(await myOrdersView(u));
+    case 'srch': u.step = 'search'; return ctx.reply({ text: 'Напишите, что ищете — например, <b>креветки</b>, <b>икра</b> или <b>форель</b>.' });
     case 'thx': return ctx.reply({ text: 'Спасибо! Ждём курьера вместе с вами 🐟' });
     case 'ask': {
-      u.step = 'question'; u.draft = { ...(u.draft || {}), askId: a || null }; store.touch();
+      u.step = 'question'; u.draft = { ...(u.draft || {}), askId: a || null };
       const p = a && c.byId[+a];
       return ctx.reply({ text: p ? `Напишите вопрос про «${esc(catalog.fullName(p))}» — например, нужный вес. Передам менеджеру, ответ придёт сюда.` : 'Напишите ваш вопрос — передам менеджеру, ответ придёт в этот чат.', buttons: [[{ text: '✖️ Отменить', cb: 'cx' }]] });
     }
     case 'rp': {
-      const o = store.order(+a);
+      const o = await store.order(+a);
       if (!o || o.platform !== u.platform || String(o.userId) !== String(u.userId)) return ctx.toast('Заказ не найден');
       let skipped = 0;
       for (const l of o.lines) { const p = c.byId[l.id]; if (p && !p.out && !P.isAsk(p)) u.cart[l.id] = P.normQty(p, l.qty); else skipped++; }
-      store.touch();
       if (skipped) await ctx.reply({ text: `ℹ️ ${skipped} ${P.plural(skipped, 'позиции', 'позиций', 'позиций')} сейчас нет в наличии — остальное добавил в корзину.` });
       return ctx.reply(cartView(u));
     }
     // оформление
     case 'co': return ctx.reply(startCheckout(u, ev));
-    case 'cx': u.step = null; u.draft = {}; store.touch(); return ctx.reply({ text: 'Хорошо, отменил. Корзина сохранена.', buttons: [[{ text: cartBtnLabel(u), cb: 'cart' }, { text: '← Меню', cb: 'm' }]] });
+    case 'cx': u.step = null; u.draft = {}; return ctx.reply({ text: 'Хорошо, отменил. Корзина сохранена.', buttons: [[{ text: cartBtnLabel(u), cb: 'cart' }, { text: '← Меню', cb: 'm' }]] });
     case 'nm': if (u.step !== 'name') return; u.draft.name = u.draft.suggestName; return ctx.edit(nextStep(u));
     case 'ph': if (u.step !== 'phone') return; u.draft.phone = u.profile.phone; await ctx.reply({ text: `📱 Телефон: ${esc(u.draft.phone)} ✓` }); return ctx.reply(nextStep(u));
     case 'ad': if (u.step !== 'address') return; u.draft.address = u.profile.address; await ctx.reply({ text: `📍 Адрес: ${esc(u.draft.address)} ✓` }); return ctx.reply(nextStep(u));
@@ -344,9 +369,9 @@ async function onCallback(u, ev, ctx) {
     case 'ok': {
       if (u.step !== 'confirm') return ctx.toast('Заказ уже оформлен');
       const d = u.draft;
-      const r = await orders.create({ platform: u.platform, userId: u.userId, chatId: u.chatId, username: u.username, source: 'chat', verified: true, cart: u.cart, name: d.name, phone: d.phone, address: d.address, time: d.time, pay: d.pay, comment: d.comment });
+      const r = await orders.create({ user: u, platform: u.platform, userId: u.userId, chatId: u.chatId, username: u.username, source: 'chat', verified: true, cart: u.cart, name: d.name, phone: d.phone, address: d.address, time: d.time, pay: d.pay, comment: d.comment });
       if (!r.ok) return ctx.reply({ text: '⚠️ ' + r.errors.join('\n'), buttons: [[{ text: '🛒 Корзина', cb: 'cart' }]] });
-      u.step = null; u.draft = {}; u.pick = {}; store.touch();
+      u.step = null; u.draft = {};
       return ctx.edit({ text: orders.customerText(r.order), buttons: [[{ text: '🐟 В каталог', cb: 'cats' }, { text: '📞 Менеджер', cb: 'ct' }]] });
     }
   }
@@ -357,21 +382,21 @@ async function onCallback(u, ev, ctx) {
 async function sendQuestion(u, ev, ctx, text) {
   const c = catalog.get();
   const p = u.draft && u.draft.askId && c.byId[+u.draft.askId];
-  const q = store.newQuestion({ platform: u.platform, userId: u.userId, chatId: u.chatId, name: ev.user.name, username: u.username, phone: u.profile.phone || '', text: (p ? `[${catalog.fullName(p)}] ` : '') + text });
-  u.step = null; u.draft = {}; store.touch();
+  const q = await store.newQuestion({ platform: u.platform, userId: u.userId, chatId: u.chatId, name: ev.user.name, username: u.username, phone: u.profile.phone || '', text: (p ? `[${catalog.fullName(p)}] ` : '') + text });
+  u.step = null; u.draft = {};
   const view = { text: `❓ <b>Вопрос из ${u.platform === 'tg' ? 'Telegram' : 'MAX'}</b>\n👤 ${esc(q.name)}${q.username ? ' (@' + esc(q.username) + ')' : ''}${q.phone ? '\n📱 ' + esc(q.phone) : ''}\n\n${esc(q.text)}`, buttons: [[{ text: '↩️ Ответить', cb: `mq:${q.id}` }]] };
   const hub = require('./hub');
   let delivered = 0;
-  for (const m of store.managers()) if (await hub.send(m.platform, { chatId: m.chatId }, view)) delivered++;
+  for (const m of await store.managers()) if (await hub.send(m.platform, { chatId: m.chatId }, view)) delivered++;
   return ctx.reply({ text: delivered ? 'Передал менеджеру ✅ Ответ придёт в этот чат, обычно в течение 10–15 минут.' : `Менеджер сейчас не в сети. Позвоните, пожалуйста: ${esc(c.settings.phone_tel || '')}`, buttons: [[{ text: '← Меню', cb: 'm' }]] });
 }
 
 // ---------- менеджер ----------
 async function managerCommand(u, ev, ctx) {
   const arg = String(ev.text).split(/\s+/)[1] || '';
-  if (arg === 'off') { store.removeManager(ev.platform, ev.chatId); return ctx.reply({ text: 'Уведомления о заказах отключены.' }); }
+  if (arg === 'off') { await store.removeManager(ev.platform, ev.chatId); return ctx.reply({ text: 'Уведомления о заказах отключены.' }); }
   if (!config.managerPin || arg !== config.managerPin) return ctx.reply({ text: 'Неверный код. Попросите код у администратора.' });
-  store.addManager(ev.platform, ev.chatId, ev.user.name);
+  await store.addManager(ev.platform, ev.chatId, ev.user.name);
   return ctx.reply({ text: `✅ Вы подключены как менеджер. Сюда будут приходить заказы и вопросы покупателей.\n\nОтключить: /manager off` });
 }
 
@@ -380,21 +405,21 @@ async function managerHandle(u, ev, ctx) {
   if (ev.type === 'text' && u.mstep) {
     const [kind, id] = u.mstep.split(':');
     const t = String(ev.text).trim();
-    if (/^(отмена|\/cancel)$/i.test(t)) { u.mstep = null; store.touch(); await ctx.reply({ text: 'Отменено.' }); return true; }
+    if (/^(отмена|\/cancel)$/i.test(t)) { u.mstep = null; await ctx.reply({ text: 'Отменено.' }); return true; }
     if (kind === 'sum') {
       const sum = parseInt(t.replace(/[^\d]/g, ''), 10);
       if (!sum) { await ctx.reply({ text: 'Введите итоговую сумму числом, например 4820. Или «отмена».' }); return true; }
-      u.mstep = null; store.touch();
+      u.mstep = null;
       const o = await orders.setFinalSum(+id, sum, ev.user.name);
       await ctx.reply({ text: `Итог ${P.rub(sum)} по заказу №${id} отправлен покупателю ✓` });
       if (o) await orders.refreshManagerCards(o);
       return true;
     }
     if (kind === 'ans') {
-      const q = store.question(id);
-      u.mstep = null; store.touch();
+      const q = await store.question(id);
+      u.mstep = null;
       if (!q) { await ctx.reply({ text: 'Вопрос не найден.' }); return true; }
-      q.answered = true; store.touch();
+      q.answered = true; await store.saveQuestion(q);
       const hub = require('./hub');
       await hub.send(q.platform, { chatId: q.chatId }, { text: `💬 <b>Ответ менеджера:</b>\n${esc(t)}`, buttons: [[{ text: '🐟 Каталог', cb: 'cats' }, { text: '💬 Ещё вопрос', cb: 'ask' }]] });
       await ctx.reply({ text: 'Ответ отправлен покупателю ✓' });
@@ -404,14 +429,14 @@ async function managerHandle(u, ev, ctx) {
   if (ev.type !== 'callback') return false;
   const [k, id, act] = String(ev.data || '').split(':');
   if (k === 'mq') {
-    u.mstep = `ans:${id}`; store.touch();
+    u.mstep = `ans:${id}`;
     await ctx.reply({ text: 'Напишите ответ одним сообщением — бот перешлёт его покупателю. «отмена» — чтобы выйти.' });
     return true;
   }
   if (k !== 'mo') return false;
   const map = { ok: 'confirmed', go: 'going', done: 'done', x: 'canceled' };
   if (act === 'sum') {
-    u.mstep = `sum:${id}`; store.touch();
+    u.mstep = `sum:${id}`;
     await ctx.reply({ text: `Заказ №${id}: введите итоговую сумму после взвешивания (числом).` });
     return true;
   }

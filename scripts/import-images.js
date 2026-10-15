@@ -16,34 +16,37 @@ async function download(url) {
   return buf;
 }
 
-async function importImages({ log = console.log } = {}) {
-  catalog.load();
-  const raw = catalog._raw();
+async function importImages({ log = console.log, budgetMs = 0 } = {}) {
+  const started = Date.now();
+  const raw = await catalog._raw();
   const jobs = [
     ...raw.cats.filter(c => /^https?:\/\//.test(c.image || '')).map(c => ({ kind: 'cat', id: c.cid, url: c.image, title: c.name })),
     ...raw.products.filter(p => /^https?:\/\//.test(p.image || '')).map(p => ({ kind: 'product', id: p.id, url: p.image, title: p.name })),
   ];
   const done = new Map(); // одно и то же фото у нескольких товаров скачиваем один раз
   let ok = 0, failed = 0;
+  let left = jobs.length;
   for (const j of jobs) {
+    if (budgetMs && Date.now() - started > budgetMs) break; // на Vercel работаем порциями
+    left--;
     try {
       let local = done.get(j.url);
       if (!local) {
         const full = await download(j.url);
         const thumb = await download(catalog.thumbOf(j.url)).catch(() => null);
-        local = media.saveImage(full, thumb);
+        local = await media.saveImage(full, thumb);
         done.set(j.url, local);
       }
-      catalog.setImage(j.kind, j.id, local);
+      await catalog.setImage(j.kind, j.id, local);
       ok++;
     } catch (e) {
       failed++;
       log(`  ✗ ${j.title}: ${e.message}`);
     }
   }
-  log(`Фото перенесено: ${ok}, не удалось: ${failed}, всего ссылок было: ${jobs.length}`);
-  return { ok, failed, total: jobs.length };
+  log(`Фото перенесено: ${ok}, не удалось: ${failed}, осталось: ${left}, всего ссылок было: ${jobs.length}`);
+  return { ok, failed, left, total: jobs.length };
 }
 
-if (require.main === module) importImages().catch(e => { console.error(e); process.exit(1); });
+if (require.main === module) importImages().then(() => require('../src/db').flush()).catch(e => { console.error(e); process.exit(1); });
 module.exports = { importImages };

@@ -47,7 +47,7 @@ function validate(input) {
 async function create(input) {
   const v = validate(input);
   if (v.errors.length) return { ok: false, errors: v.errors };
-  const o = store.newOrder({
+  const o = await store.newOrder({
     platform: input.platform,
     userId: input.userId ? String(input.userId) : null,
     chatId: input.chatId ? String(input.chatId) : null,
@@ -63,16 +63,22 @@ async function create(input) {
     weighed: v.sum.weighed,
     managerMsgs: [],
   });
-  // Запоминаем данные для следующего заказа и чистим корзину
+  // Запоминаем данные для следующего заказа и чистим корзину.
+  // Если вызывающий уже держит объект покупателя (input.user) — меняем его, сохранит вызывающий.
   if (input.platform !== 'web' && input.userId) {
-    const u = store.user(input.platform, input.userId);
-    u.cart = {};
+    const u = input.user || (await store.getUser(input.platform, input.userId));
+    u.cart = {}; u.pick = {};
     u.profile = { ...u.profile, name: v.name, phone: v.phone, address: v.address };
-    store.touch();
+    u.orderIds = [o.id, ...(u.orderIds || [])].slice(0, 20);
+    if (!input.user) await store.saveUser(u);
   }
-  // Уведомления — не ждём, чтобы покупатель сразу увидел «принято»
-  notifyManagers(o).catch(e => console.error('[orders] managers:', e.message));
-  b24.pushOrder(o).then(r => { if (r) store.setOrder(o.id, { crm: r }); }).catch(e => console.error('[b24]', e.message));
+  // Уведомления ждём до ответа: на serverless работа после ответа может не выполниться
+  const [crm] = await Promise.allSettled([
+    b24.pushOrder(o),
+    notifyManagers(o),
+  ]);
+  if (crm.status === 'fulfilled' && crm.value) { o.crm = crm.value; await store.setOrder(o.id, { crm: crm.value }); }
+  if (crm.status === 'rejected') console.error('[b24]', crm.reason.message);
   return { ok: true, order: o };
 }
 
@@ -111,14 +117,15 @@ function managerView(o) {
 
 async function notifyManagers(o) {
   const view = managerView(o);
-  const list = store.managers();
+  const list = await store.managers();
   if (!list.length) console.warn(`[orders] заказ №${o.id}: нет ни одного менеджера (MANAGER_PIN / *_MANAGER_CHAT_IDS)`);
   const msgs = [];
   for (const m of list) {
     const r = await hub.send(m.platform, { chatId: m.chatId }, view);
     if (r && r.msgId) msgs.push({ platform: m.platform, chatId: m.chatId, msgId: r.msgId });
   }
-  store.setOrder(o.id, { managerMsgs: msgs });
+  o.managerMsgs = msgs;
+  await store.setOrder(o.id, { managerMsgs: msgs });
 }
 
 // Обновить карточку заказа у всех менеджеров (кроме того, кто уже видит изменения через edit)
@@ -140,7 +147,7 @@ async function notifyCustomer(o, text, buttons) {
 }
 
 async function setStatus(id, status, by) {
-  const o = store.setOrder(id, { status, by });
+  const o = await store.setOrder(id, { status, by });
   if (!o) return null;
   const msgs = {
     confirmed: `✅ <b>Заказ №${o.id} подтверждён.</b>\nДоставка: ${esc(o.time)}.${o.finalSum ? `\nИтог по весу: <b>${P.rub(o.finalSum)}</b>` : ''}`,
@@ -154,7 +161,7 @@ async function setStatus(id, status, by) {
 }
 
 async function setFinalSum(id, sum, by) {
-  const o = store.setOrder(id, { finalSum: sum, by });
+  const o = await store.setOrder(id, { finalSum: sum, by });
   if (!o) return null;
   await notifyCustomer(o, `⚖️ Взвесили ваш заказ №${o.id}: итог <b>${P.rub(sum)}</b>.\nДоставка: ${esc(o.time)}.`, [[{ text: '👍 Всё верно', cb: 'thx' }, { text: '📞 Менеджер', cb: 'ct' }]]);
   return o;

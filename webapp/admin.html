@@ -137,6 +137,15 @@ label.f small{font-weight:500;color:var(--muted)}
 /* настройки */
 .form{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:14px;max-width:640px}
 
+/* подключение */
+.conn{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:12px;max-width:640px;margin-bottom:16px}
+.conn h3{font-size:16px}
+.bot{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;font-size:13.5px;align-items:center}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--muted);display:inline-block;margin-right:6px}
+.dot.ok{background:var(--ok)}.dot.bad{background:var(--coral)}
+.conn a{color:var(--sea);font-weight:700}
+.conn .acts{display:flex;gap:8px;flex-wrap:wrap}
+
 /* окно товара */
 .modal{position:fixed;inset:0;z-index:40;display:flex;align-items:flex-end;justify-content:center}
 .modal .ov{position:absolute;inset:0;background:rgba(5,15,20,.5)}
@@ -430,12 +439,29 @@ function renderOrders(){
 
 /* ---------- настройки ---------- */
 var SET_FIELDS=[['brand','Название магазина','text'],['phone_tel','Телефон','tel'],['phone_wa','WhatsApp (только цифры)','tel'],['hours','Часы работы','text'],['min_order','Минимальная сумма заказа, ₽','number'],['price_date','«Цены актуальны на»','text','Обновляется само при изменении цен'],['delivery','Условия доставки','area'],['payment','Способы оплаты','area']];
+function botLine(name,b){
+  if(!b||!b.enabled) return '<span><span class="dot"></span>'+name+'</span><span class="muted">не настроен — нет токена</span>';
+  if(b.error) return '<span><span class="dot bad"></span>'+name+'</span><span>'+esc(b.error)+'</span>';
+  return '<span><span class="dot '+(b.connected?'ok':'bad')+'"></span>'+name+'</span><span>'+(b.link?'<a href="'+esc(b.link)+'" target="_blank" rel="noopener">@'+esc(b.username)+'</a>':esc(b.username||''))+' · '+(b.connected?'подключён':'не подключён — нажмите «Подключить ботов»')+(b.lastError?'<br><span class="muted">Последняя ошибка: '+esc(b.lastError)+'</span>':'')+'</span>';
+}
+function renderConn(st){
+  var el=$('conn'); if(!el) return;
+  if(!st){ el.innerHTML='<h3>Подключение</h3><p class="muted">Проверяем…</p>'; return; }
+  el.innerHTML='<h3>Подключение</h3><div class="bot">'+botLine('Telegram',st.tg)+botLine('MAX',st.max)+
+    '<span class="muted">Адрес</span><span>'+(st.publicUrl?'<a href="'+esc(st.publicUrl)+'/app/?p=web" target="_blank" rel="noopener">'+esc(st.publicUrl)+'</a>':'не задан')+'</span>'+
+    '<span class="muted">Хранилище</span><span>'+(st.storage==='redis'?'Redis (Upstash)':'файл на сервере')+'</span></div>'+
+    '<div class="acts"><button class="btn sm" type="button" data-connect>Подключить ботов</button>'+
+    (st.externalImages?'<button class="btn ghost sm" type="button" data-import>Перенести фото к себе ('+st.externalImages+')</button>':'')+'</div>'+
+    '<p class="muted">«Подключить ботов» привязывает Telegram и MAX к этому адресу и ставит кнопку «Магазин». Нажмите после первого запуска и после смены токена.'+(st.externalImages?' Сейчас '+st.externalImages+' фото берутся по ссылкам с сайта — перенесите их, чтобы магазин не зависел от сайта.':'')+'</p>';
+}
+function loadConn(){ renderConn(null); api('bots').then(renderConn).catch(function(x){ fail(x); }); }
 function renderSettings(){
   var s=S.settings;
-  $('t-settings').innerHTML='<form class="form" id="sf">'+SET_FIELDS.map(function(f){
+  $('t-settings').innerHTML='<section class="conn" id="conn"></section><form class="form" id="sf">'+SET_FIELDS.map(function(f){
     var hint=f[3]?' <small>'+f[3]+'</small>':'';
     return '<label class="f">'+f[1]+hint+(f[2]==='area'?'<textarea class="in" name="'+f[0]+'">'+esc(s[f[0]]||'')+'</textarea>':'<input class="in" name="'+f[0]+'" type="'+f[2]+'" value="'+esc(s[f[0]]||'')+'">')+'</label>';
   }).join('')+'<div><button class="btn" type="submit">Сохранить</button></div></form>';
+  loadConn();
 }
 $('t-settings').addEventListener('submit',function(e){
   e.preventDefault(); var data={};
@@ -489,6 +515,10 @@ document.addEventListener('click',function(e){
     if(t.dataset.sure!=='1'){ t.dataset.sure='1'; t.textContent='Точно?'; t.classList.add('sure'); return; }
     return api('category/delete',{cid:d.cdel}).then(function(){ toast('Категория удалена'); renderCats(); }).catch(fail);
   }
+  if(d.connect!==undefined){ t.disabled=true; t.textContent='Подключаем…';
+    return api('bots/connect',{}).then(function(j){ var e=Object.keys(j.errors||{}).map(function(k){return (k==='tg'?'Telegram':'MAX')+': '+j.errors[k];}); if(e.length) toast(e.join('; '),true); else toast('Боты подключены'); renderConn(j); }).catch(function(x){ fail(x); loadConn(); }); }
+  if(d.import!==undefined){ t.disabled=true; t.textContent='Переносим… это до минуты';
+    return api('images/import',{}).then(function(j){ toast('Перенесено: '+j.ok+(j.failed?', не удалось: '+j.failed:'')+(j.left?', осталось: '+j.left+' — нажмите ещё раз':''), !!j.failed); loadConn(); }).catch(function(x){ fail(x); loadConn(); }); }
   if(d.ofilter){ ui.ordersFilter=d.ofilter; return loadOrders(); }
   if(d.oreload!==undefined) return loadOrders();
   if(d.ost) return api('order/status',{id:+d.ost,status:d.st}).then(function(){ toast('Статус изменён, покупатель уведомлён'); loadOrders(); }).catch(fail);

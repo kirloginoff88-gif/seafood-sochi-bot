@@ -20,14 +20,16 @@ const config = {
   root: ROOT,
   port: +env('PORT', '8080'),
   // Публичный адрес сервера с HTTPS, например https://bot.seafood-sochi.ru
-  publicUrl: env('PUBLIC_URL').replace(/\/$/, ''),
+  // На Vercel адрес берётся сам из VERCEL_PROJECT_PRODUCTION_URL (например seafood-sochi-bot.vercel.app)
+  publicUrl: (env('PUBLIC_URL') || (env('VERCEL_PROJECT_PRODUCTION_URL') ? 'https://' + env('VERCEL_PROJECT_PRODUCTION_URL') : '')).replace(/\/$/, ''),
+  serverless: !!env('VERCEL'),
   // Рабочие данные: каталог, фото, заказы. В git не попадают.
   dataDir: path.resolve(ROOT, env('DATA_DIR', 'storage')),
 
   telegram: {
     token: env('TG_TOKEN'),
     mode: env('TG_MODE', 'polling'), // polling | webhook
-    webhookSecret: env('TG_WEBHOOK_SECRET', 'sfsochi-tg-hook'),
+    webhookSecret: env('TG_WEBHOOK_SECRET'),
     managers: list('TG_MANAGER_CHAT_IDS'),
   },
   max: {
@@ -35,7 +37,7 @@ const config = {
     botName: env('MAX_BOT_NAME'), // публичное имя бота, к которому привязано мини-приложение
     api: env('MAX_API', 'https://platform-api2.max.ru'),
     mode: env('MAX_MODE', 'polling'), // polling | webhook
-    webhookSecret: env('MAX_WEBHOOK_SECRET', 'sfsochi-max-hook'),
+    webhookSecret: env('MAX_WEBHOOK_SECRET'),
     managers: list('MAX_MANAGER_CHAT_IDS'),
   },
 
@@ -62,6 +64,10 @@ const config = {
 };
 
 config.b24.enabled = !!env('B24_WEBHOOK');
+// Секреты вебхуков: если не заданы — выводим из токена, чтобы не хранить ещё одну переменную
+const derive = (label, token) => crypto.createHash('sha256').update(label + ':' + token).digest('hex').slice(0, 48);
+config.telegram.webhookSecret ||= derive('tg-hook', config.telegram.token);
+config.max.webhookSecret ||= derive('max-hook', config.max.token);
 // Секрет для подписи сессий админки; смена пароля разлогинивает всех
 config.admin.secret = crypto.createHash('sha256').update('sf-admin:' + config.admin.password).digest();
 config.appUrl = platform => `${config.publicUrl}/app/?p=${platform}`;

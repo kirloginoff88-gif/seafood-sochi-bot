@@ -1,12 +1,13 @@
 // Админ-панель: вход по паролю и API для каталога, настроек и заказов.
 const crypto = require('crypto');
-const path = require('path');
 const config = require('./config');
 const catalog = require('./catalog');
 const store = require('./store');
 const orders = require('./orders');
 const media = require('./media');
-const { json, readBody, sendFile, clientIp, limiter } = require('./web');
+const { json, readBody, clientIp, limiter } = require('./web');
+const hub = require('./hub');
+const db = require('./db');
 
 const COOKIE = 'sf_admin';
 const TTL = 30 * 24 * 3600 * 1000;
@@ -46,8 +47,8 @@ function adminState() {
   };
 }
 
-function orderList(filter) {
-  const all = Object.values(store._db().orders).sort((a, b) => b.id - a.id);
+async function orderList(filter) {
+  const all = await store.listOrders(200);
   const list = filter === 'all' ? all : all.filter(o => !['done', 'canceled'].includes(o.status));
   return list.slice(0, 200).map(o => ({
     id: o.id, status: o.status, createdAt: o.createdAt, platform: o.platform, source: o.source, verified: o.verified,
@@ -57,14 +58,20 @@ function orderList(filter) {
   }));
 }
 
+// Состояние подключения ботов — для блока «Подключение» в настройках
+async function botsStatus() {
+  const external = catalog.get().products.filter(p => /^https?:\/\//.test(p.image || '')).length;
+  const out = { publicUrl: config.publicUrl, storage: db.kind, serverless: config.serverless, externalImages: external, tg: { enabled: false }, max: { enabled: false } };
+  for (const pl of ['tg', 'max']) {
+    if (!hub.adapters[pl]) continue;
+    try { out[pl] = await hub.adapters[pl].status(); } catch (e) { out[pl] = { enabled: true, error: e.message }; }
+  }
+  return out;
+}
+
 // Возвращает true, если запрос обработан
 async function handle(req, res, url) {
   const p = url.pathname;
-  if (p === '/admin' || p === '/admin/') {
-    if (req.method !== 'GET') return false;
-    sendFile(res, path.join(config.root, 'webapp', 'admin.html'), 'no-cache');
-    return true;
-  }
   if (!p.startsWith('/admin/api/')) return false;
   const action = p.slice('/admin/api/'.length);
 
@@ -85,26 +92,41 @@ async function handle(req, res, url) {
 
   try {
     if (req.method === 'GET' && action === 'state') return json(res, 200, { ok: true, ...adminState() }), true;
-    if (req.method === 'GET' && action === 'orders') return json(res, 200, { ok: true, orders: orderList(url.searchParams.get('filter')), statuses: orders.STATUS }), true;
+    if (req.method === 'GET' && action === 'orders') return json(res, 200, { ok: true, orders: await orderList(url.searchParams.get('filter')), statuses: orders.STATUS }), true;
+    if (req.method === 'GET' && action === 'bots') return json(res, 200, { ok: true, ...(await botsStatus()) }), true;
     if (req.method !== 'POST') return json(res, 405, { ok: false }), true;
 
     const body = await readBody(req, action === 'upload' ? 12 * 1024 * 1024 : 200 * 1024).catch(() => null);
     if (!body) return json(res, 400, { ok: false, error: 'Слишком большой или некорректный запрос' }), true;
 
     switch (action) {
-      case 'product/save': { const product = catalog.saveProduct(body.product || {}); return json(res, 200, { ok: true, product, ...adminState() }), true; }
-      case 'product/quick': { catalog.quickProduct(body.id, { price: body.price, out: body.out }); return json(res, 200, { ok: true, ...adminState() }), true; }
-      case 'product/delete': catalog.deleteProduct(body.id); return json(res, 200, { ok: true, ...adminState() }), true;
-      case 'product/move': catalog.moveProduct(body.id, body.dir); return json(res, 200, { ok: true, ...adminState() }), true;
-      case 'category/save': catalog.saveCategory(body.category || {}); return json(res, 200, { ok: true, ...adminState() }), true;
-      case 'category/delete': catalog.deleteCategory(body.cid); return json(res, 200, { ok: true, ...adminState() }), true;
-      case 'category/move': catalog.moveCategory(body.cid, body.dir); return json(res, 200, { ok: true, ...adminState() }), true;
-      case 'settings/save': catalog.saveSettings(body.settings || {}); return json(res, 200, { ok: true, ...adminState() }), true;
+      case 'product/save': { const product = await catalog.saveProduct(body.product || {}); return json(res, 200, { ok: true, product, ...adminState() }), true; }
+      case 'product/quick': { await catalog.quickProduct(body.id, { price: body.price, out: body.out }); return json(res, 200, { ok: true, ...adminState() }), true; }
+      case 'product/delete': await catalog.deleteProduct(body.id); return json(res, 200, { ok: true, ...adminState() }), true;
+      case 'product/move': await catalog.moveProduct(body.id, body.dir); return json(res, 200, { ok: true, ...adminState() }), true;
+      case 'category/save': await catalog.saveCategory(body.category || {}); return json(res, 200, { ok: true, ...adminState() }), true;
+      case 'category/delete': await catalog.deleteCategory(body.cid); return json(res, 200, { ok: true, ...adminState() }), true;
+      case 'category/move': await catalog.moveCategory(body.cid, body.dir); return json(res, 200, { ok: true, ...adminState() }), true;
+      case 'settings/save': await catalog.saveSettings(body.settings || {}); return json(res, 200, { ok: true, ...adminState() }), true;
       case 'upload': {
         const full = media.fromDataUrl(body.full);
         if (!full) return json(res, 400, { ok: false, error: 'Не удалось прочитать фото' }), true;
-        const image = media.saveImage(full, media.fromDataUrl(body.thumb));
+        const image = await media.saveImage(full, media.fromDataUrl(body.thumb));
         return json(res, 200, { ok: true, image, thumb: catalog.thumbOf(image) }), true;
+      }
+      case 'bots/connect': {
+        const out = {};
+        for (const pl of ['tg', 'max']) {
+          if (!hub.adapters[pl]) continue;
+          try { await hub.adapters[pl].connect(); } catch (e) { out[pl] = e.message; }
+        }
+        return json(res, 200, { ok: true, errors: out, ...(await botsStatus()) }), true;
+      }
+      case 'images/import': {
+        const { importImages } = require('../scripts/import-images');
+        const errors = [];
+        const r = await importImages({ log: m => errors.push(m), budgetMs: 40000 });
+        return json(res, 200, { ok: true, ...r, errors: errors.slice(0, 10), ...adminState() }), true;
       }
       case 'order/status': {
         if (!STATUSES.includes(body.status)) return json(res, 400, { ok: false, error: 'Неизвестный статус' }), true;

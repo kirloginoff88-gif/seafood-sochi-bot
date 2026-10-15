@@ -7,7 +7,7 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test test/run.js",
+    "test": "node --test test/run.js && TEST_BACKEND=redis node --test test/run.js",
     "import-images": "node scripts/import-images.js"
   },
   "license": "UNLICENSED"

@@ -19,31 +19,54 @@
 
 ---
 
-## Как устроено хранение
+## Где запустить
+
+| Вариант | Цена | Для чего |
+|---|---|---|
+| **Vercel + Upstash Redis** | бесплатно | тест и демо клиенту |
+| **VPS в России + Docker** | ~300–500 ₽/мес | постоянная работа |
+
+Почему для постоянной работы лучше VPS в России:
+- **Тариф Vercel Hobby** разрешает только некоммерческое использование.
+- **Доступ из России.** По отзывам разработчиков, адреса `*.vercel.app` из России в целом открываются, но часть инфраструктуры Vercel попадает под блокировки. Для магазина это риск.
+- **Закон о персональных данных (152-ФЗ).** Телефоны и адреса покупателей на зарубежных серверах ему противоречат.
+
+Код один и тот же. Хранилище выбирается само: если заданы переменные Upstash — Redis, иначе файл `storage/data.json`.
+
+### Что где хранится
 
 | Что | Где | В git? |
 |---|---|---|
 | Код | репозиторий | да |
 | Стартовый каталог (109 товаров, загружается при первом запуске) | `data/catalog.seed.json` | да |
-| Рабочий каталог, фото, заказы, корзины | `storage/` на сервере | **нет** |
-| Токены и пароли | `.env` на сервере | **нет** |
+| Рабочий каталог, фото, заказы, корзины | Redis (Vercel) или `storage/` (VPS) | **нет** |
+| Токены и пароли | переменные окружения Vercel или `.env` на сервере | **нет** |
 
-Обновление кода (`git pull`) не трогает каталог и заказы. Раз в день, при первом изменении каталога, его копия сохраняется в `storage/backup/`.
+Резервная копия каталога сохраняется раз в день при первом изменении. Хранятся копии за последние 14 дней.
 
 ---
 
-## 1. Залить на GitHub
+## 1. Бесплатный запуск на Vercel
 
-```bash
-# 1. На github.com создайте ПРИВАТНЫЙ репозиторий, например seafood-sochi-bot (без README)
-# 2. В папке проекта:
-git remote add origin git@github.com:ВАШ_АККАУНТ/seafood-sochi-bot.git
-git push -u origin main
-```
+1. **Создайте проект на Vercel.** [vercel.com](https://vercel.com) → Sign up → Continue with GitHub. Затем **Add New → Project** и импортируйте репозиторий `seafood-sochi-bot`.
+2. **Добавьте переменные** в **Environment Variables** до первого деплоя:
 
-После пуша во вкладке **Actions** автоматически прогоняются тесты.
+   | Переменная | Значение |
+   |---|---|
+   | `TG_TOKEN` | токен бота от @BotFather |
+   | `ADMIN_PASSWORD` | пароль админки |
+   | `MANAGER_PIN` | код для `/manager` |
+   | `MAX_TOKEN`, `MAX_BOT_NAME` | когда появится бот в MAX |
 
-## 2. Сервер
+3. **Нажмите Deploy.**
+4. **Подключите хранилище.** В проекте: **Storage → Create → Upstash (Redis)** → регион Frankfurt → Connect to project. Vercel сам добавит переменные `KV_REST_API_URL` и `KV_REST_API_TOKEN`.
+5. **Передеплойте:** **Deployments → ⋯ → Redeploy**, чтобы приложение увидело хранилище.
+6. **Привяжите ботов.** Откройте `https://<проект>.vercel.app/admin` → **Настройки → Подключение** → «Подключить ботов».
+7. **Перенесите фото.** Там же нажмите «Перенести фото к себе», чтобы фото не зависели от сайта.
+
+Адрес `https://<проект>.vercel.app` и есть бесплатный поддомен. `PUBLIC_URL` задавать не нужно: адрес определяется сам. Каждый пуш в `main` разворачивается автоматически.
+
+## 2. Сервер (VPS)
 
 Подойдёт любой VPS в РФ: Ubuntu 22/24, 1 ГБ RAM.
 
@@ -58,7 +81,7 @@ ssh-keygen -t ed25519 -f ~/.ssh/github -N ""
 cat ~/.ssh/github.pub   # → GitHub: Settings репозитория → Deploy keys → Add (только чтение)
 printf "Host github.com\n  IdentityFile ~/.ssh/github\n" >> ~/.ssh/config
 
-git clone git@github.com:ВАШ_АККАУНТ/seafood-sochi-bot.git /opt/seafood-bot
+git clone git@github.com:kirloginoff88-gif/seafood-sochi-bot.git /opt/seafood-bot
 cd /opt/seafood-bot
 cp .env.example .env && nano .env      # DOMAIN, PUBLIC_URL, ADMIN_PASSWORD, токены, MANAGER_PIN
 docker compose up -d --build
@@ -66,30 +89,19 @@ docker compose logs -f bot             # должно быть «бот @… з�
 ```
 
 3. Проверьте `https://ваш-домен/health` — должен ответить `{"ok":true,...}`.
+4. Фото с seafood-sochi.ru переносятся кнопкой в админке или командой `docker compose exec bot node scripts/import-images.js`.
 
-### Перенести фото к себе (один раз)
-
-Стартовые товары ссылаются на фото с seafood-sochi.ru. Команда скачает их к вам на сервер:
-
-```bash
-docker compose exec bot node scripts/import-images.js
-```
-
-Повторный запуск безопасен. Новые фото из админки и так сохраняются на сервере.
-
-## 3. Обновление после изменений в коде
-
-На сервере:
+### Обновление на VPS
 
 ```bash
 cd /opt/seafood-bot && git pull && docker compose up -d --build
 ```
 
-Или одной кнопкой из GitHub: **Actions → «Деплой на сервер» → Run workflow**. Для этого один раз добавьте секреты репозитория (Settings → Secrets → Actions):
+Или одной кнопкой из GitHub: **Actions → «Деплой на сервер» → Run workflow**. Для этого один раз добавьте секреты репозитория:
 
 - `SSH_HOST` — IP сервера;
 - `SSH_USER` — обычно `root`;
-- `SSH_KEY` — приватный SSH-ключ, которым можно зайти на сервер;
+- `SSH_KEY` — приватный SSH-ключ;
 - `APP_DIR` — `/opt/seafood-bot`.
 
 ## 4. Админ-панель
@@ -120,7 +132,7 @@ cd /opt/seafood-bot && git pull && docker compose up -d --build
 
 ## 5. Мессенджеры
 
-**Telegram.** Создайте бота в @BotFather: `/newbot`, затем `/setuserpic` и `/setdescription`. Кнопку «Магазин» бот поставит сам.
+**Telegram.** Создайте бота в @BotFather: `/newbot`, затем `/setuserpic` и `/setdescription`. Кнопку «Магазин» бот ставит сам, когда вы нажимаете «Подключить ботов» в админке. На VPS в режиме polling он делает это при запуске.
 
 **MAX.**
 1. На платформе для партнёров создайте бота: «Чат-боты» → создать.
@@ -128,13 +140,16 @@ cd /opt/seafood-bot && git pull && docker compose up -d --build
 
 **Менеджеры.** Каждый сотрудник пишет боту `/manager ПИН`, где ПИН берётся из `MANAGER_PIN`. Отключиться: `/manager off`.
 
-После проверки переключите оба бота на вебхуки: в `.env` поставьте `TG_MODE=webhook` и `MAX_MODE=webhook`, затем выполните `docker compose up -d`. MAX рекомендует long polling только для разработки.
+На Vercel боты работают только через вебхуки: их подключает кнопка в админке. На VPS после проверки тоже переключите оба бота на вебхуки: в `.env` поставьте `TG_MODE=webhook` и `MAX_MODE=webhook`, затем выполните `docker compose up -d`. MAX рекомендует long polling только для разработки.
 
 ## 6. Структура
 
 ```
+api/index.js            точка входа на Vercel
 src/
-  index.js              запуск
+  index.js              запуск на VPS
+  app.js                подключение мессенджеров
+  db.js                 хранилище: файл (VPS) или Upstash Redis (Vercel)
   config.js             настройки из .env
   catalog.js            каталог: хранение, изменение, поиск
   admin.js              API админ-панели и вход
@@ -159,7 +174,7 @@ test/run.js             автотесты (npm test)
 npm test
 ```
 
-Тесты проходят без сети и без токенов. Что проверяется:
+Тесты проходят без сети и без токенов, дважды: на файловом хранилище и на Redis (поддельный Upstash). Что проверяется:
 
 - заказ в чате и подтверждение менеджером, вопрос и ответ;
 - запросы к API Telegram и MAX;

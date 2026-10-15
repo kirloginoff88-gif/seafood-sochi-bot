@@ -1,26 +1,31 @@
 /*
  * Каталог — источник правды для бота и мини-приложения.
- * Хранится в storage/catalog.json. При первом запуске заполняется из data/catalog.seed.json.
- * Меняется из админ-панели; изменения сразу видны в боте и приложении.
+ * Хранится в db под ключом «catalog» (файл на VPS или Redis на Vercel).
+ * При первом запуске заполняется из data/catalog.seed.json. Меняется из админ-панели.
+ * В памяти держим копию и сверяем номер версии (catalog:ver) в начале каждого запроса —
+ * так несколько serverless-экземпляров видят изменения сразу.
  */
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
 const config = require('./config');
+const db = require('./db');
+const media = require('./media');
 const P = require('./shared/pricing');
 
-const file = () => path.join(config.dataDir, 'catalog.json');
-const seedFile = path.join(config.root, 'data', 'catalog.seed.json');
+const SEED = require('../data/catalog.seed.json');
 const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+const KEEP_BACKUPS = 14;
 
-let raw = null;   // как лежит на диске
+let raw = null;   // как лежит в хранилище
+let ver = null;   // версия, которую держим в памяти
 let state = null; // подготовленный для бота и приложения
 
 // ---------- чтение ----------
 const thumbOf = src => (src ? String(src).replace(/\.(jpg|jpeg|png|webp)(\?|$)/i, '_t.$1$2') : '');
 const absUrl = src => (!src ? '' : /^https?:\/\//.test(src) ? src : config.publicUrl ? config.publicUrl + src : '');
+const readSeed = () => JSON.parse(JSON.stringify(SEED));
 
 function build() {
+  raw.cats ||= []; raw.products ||= []; raw.settings ||= {};
   const cats = [...raw.cats].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0));
   const order = Object.fromEntries(cats.map((c, i) => [c.cid, i]));
   const products = raw.products
@@ -31,43 +36,49 @@ function build() {
     products,
     settings: { min_order: '0', ...raw.settings },
     byId: Object.fromEntries(products.map(p => [p.id, p])),
-    source: 'local',
   };
   return state;
 }
 
-function load() {
-  try {
-    raw = JSON.parse(fs.readFileSync(file(), 'utf8'));
-  } catch {
-    raw = JSON.parse(fs.readFileSync(seedFile, 'utf8'));
-    persist();
+// Подтянуть свежий каталог из хранилища (дёшево: одна проверка версии)
+async function sync() {
+  const v = await db.get('catalog:ver');
+  if (state && v !== null && v === ver) return state;
+  let doc = await db.get('catalog');
+  if (!doc) {
+    await db.set('catalog', readSeed(), { nx: true });
+    doc = await db.get('catalog');
+    if (v === null) await db.set('catalog:ver', 1, { nx: true });
     console.log('[catalog] создан каталог из стартового наполнения');
   }
-  raw.cats ||= []; raw.products ||= []; raw.settings ||= {};
+  raw = doc;
+  ver = v === null ? await db.get('catalog:ver') : v;
   return build();
 }
 
-function get() { return state || load(); }
-function start() { load(); }
+// Синхронный доступ для кода внутри запроса (после sync). До первого sync — стартовый каталог.
+function get() {
+  if (!state) { raw = readSeed(); build(); }
+  return state;
+}
 
 // ---------- запись ----------
-function persist() {
-  fs.mkdirSync(config.dataDir, { recursive: true });
-  // одна резервная копия в день — на случай случайного удаления
-  const bdir = path.join(config.dataDir, 'backup');
-  const bfile = path.join(bdir, `catalog-${new Date().toISOString().slice(0, 10)}.json`);
-  if (fs.existsSync(file()) && !fs.existsSync(bfile)) { fs.mkdirSync(bdir, { recursive: true }); fs.copyFileSync(file(), bfile); }
-  const tmp = file() + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(raw, null, 1));
-  fs.renameSync(tmp, file());
-}
-function commit({ prices } = {}) {
+async function commit({ prices } = {}) {
   if (prices) {
     const d = new Date(Date.now() + 3 * 3600e3);
     raw.settings.price_date = `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
   }
-  persist();
+  // одна резервная копия предыдущего состояния в день, храним последние две недели
+  const day = new Date().toISOString().slice(0, 10);
+  const prev = await db.get('catalog');
+  if (prev && (await db.set(`catalog:backup:${day}`, prev, { nx: true }))) {
+    const days = [day, ...((await db.get('catalog:backups')) || []).filter(d => d !== day)];
+    for (const old of days.slice(KEEP_BACKUPS)) await db.del(`catalog:backup:${old}`);
+    await db.set('catalog:backups', days.slice(0, KEEP_BACKUPS));
+  }
+  ver = Date.now() + '-' + crypto.randomBytes(3).toString('hex');
+  await db.set('catalog', raw);
+  await db.set('catalog:ver', ver);
   build();
 }
 
@@ -79,15 +90,14 @@ const isDate = s => s === '' || /^\d{4}-\d{2}-\d{2}$/.test(s);
 const isImage = s => s === '' || /^\/media\/[a-z0-9_-]+\.(jpg|png|webp)$/.test(s) || /^https:\/\/[^\s"'<>]+$/.test(s);
 
 // Удаляем загруженное фото, если на него больше никто не ссылается
-function dropImage(src) {
+async function dropImage(src) {
   if (!src || !src.startsWith('/media/')) return;
   const used = raw.products.some(p => p.image === src) || raw.cats.some(c => c.image === src);
-  if (used) return;
-  for (const f of [src, thumbOf(src)]) fs.rm(path.join(config.uploadsDir, path.basename(f)), { force: true }, () => {});
+  if (!used) await media.remove(src).catch(() => {});
 }
 
-function saveProduct(input) {
-  get();
+async function saveProduct(input) {
+  await sync();
   const isNew = !input.id;
   const old = isNew ? null : raw.products.find(p => p.id === +input.id);
   if (!isNew && !old) fail('Товар не найден — возможно, его уже удалили');
@@ -124,14 +134,14 @@ function saveProduct(input) {
   const pricesChanged = !old || old.price !== p.price || old.sale_price !== p.sale_price;
   const prevImage = old ? old.image : '';
   if (old) Object.assign(old, p); else raw.products.push(p);
-  if (prevImage && prevImage !== p.image) dropImage(prevImage);
-  commit({ prices: pricesChanged });
+  if (prevImage && prevImage !== p.image) await dropImage(prevImage);
+  await commit({ prices: pricesChanged });
   return state.byId[p.id];
 }
 
 // Быстрые правки из списка: цена и наличие
-function quickProduct(id, patch) {
-  get();
+async function quickProduct(id, patch) {
+  await sync();
   const p = raw.products.find(x => x.id === +id);
   if (!p) fail('Товар не найден');
   let prices = false;
@@ -141,17 +151,17 @@ function quickProduct(id, patch) {
     prices = v !== p.price; p.price = v;
   }
   if (patch.out !== undefined) p.out = patch.out ? 1 : 0;
-  commit({ prices });
+  await commit({ prices });
   return state.byId[p.id];
 }
 
-function deleteProduct(id) {
-  get();
+async function deleteProduct(id) {
+  await sync();
   const i = raw.products.findIndex(x => x.id === +id);
   if (i < 0) fail('Товар не найден');
   const [p] = raw.products.splice(i, 1);
-  dropImage(p.image);
-  commit();
+  await dropImage(p.image);
+  await commit();
 }
 
 // Сдвиг вверх/вниз внутри категории (или категорий между собой)
@@ -162,16 +172,16 @@ function move(list, item, dir) {
   if (j < 0 || j >= sorted.length) return;
   [sorted[i].sort, sorted[j].sort] = [sorted[j].sort, sorted[i].sort];
 }
-function moveProduct(id, dir) {
-  get();
+async function moveProduct(id, dir) {
+  await sync();
   const p = raw.products.find(x => x.id === +id);
   if (!p) fail('Товар не найден');
   move(raw.products.filter(x => x.cid === p.cid), p, dir);
-  commit();
+  await commit();
 }
 
-function saveCategory(input) {
-  get();
+async function saveCategory(input) {
+  await sync();
   const name = str(input.name, 60);
   const emoji = str(input.emoji, 8) || '🐟';
   if (!name) fail('Укажите название категории');
@@ -181,47 +191,47 @@ function saveCategory(input) {
   if (input.cid && !c) fail('Категория не найдена');
   if (raw.cats.some(x => x !== c && x.name.toLowerCase() === name.toLowerCase())) fail('Такая категория уже есть');
   if (c) {
-    if (c.image !== image) { const was = c.image; c.image = image; dropImage(was); }
+    if (c.image !== image) { const was = c.image; c.image = image; await dropImage(was); }
     Object.assign(c, { name, emoji });
   } else {
     c = { cid: 'c' + crypto.randomBytes(3).toString('hex'), name, emoji, image, sort: raw.cats.reduce((m, x) => Math.max(m, x.sort ?? 0), -1) + 1 };
     raw.cats.push(c);
   }
-  commit();
+  await commit();
   return c;
 }
-function deleteCategory(cid) {
-  get();
+async function deleteCategory(cid) {
+  await sync();
   const i = raw.cats.findIndex(x => x.cid === cid);
   if (i < 0) fail('Категория не найдена');
   if (raw.products.some(p => p.cid === cid)) fail('В категории есть товары — перенесите или удалите их');
   const [c] = raw.cats.splice(i, 1);
-  dropImage(c.image);
-  commit();
+  await dropImage(c.image);
+  await commit();
 }
-function moveCategory(cid, dir) {
-  get();
+async function moveCategory(cid, dir) {
+  await sync();
   const c = raw.cats.find(x => x.cid === cid);
   if (!c) fail('Категория не найдена');
   move(raw.cats, c, dir);
-  commit();
+  await commit();
 }
 
 const SETTINGS = { brand: 60, phone_tel: 40, phone_wa: 20, hours: 80, delivery: 400, payment: 200, price_date: 30, min_order: 10 };
-function saveSettings(input) {
-  get();
+async function saveSettings(input) {
+  await sync();
   for (const [k, max] of Object.entries(SETTINGS)) if (input[k] !== undefined) raw.settings[k] = str(input[k], max);
   raw.settings.min_order = String(int(raw.settings.min_order, 0, 1_000_000));
   raw.settings.phone_wa = raw.settings.phone_wa.replace(/\D/g, '');
   if (!raw.settings.brand) fail('Укажите название магазина');
-  commit();
+  await commit();
   return state.settings;
 }
 
-function setImage(kind, id, src) {
-  get();
+async function setImage(kind, id, src) {
+  await sync();
   const item = kind === 'cat' ? raw.cats.find(c => c.cid === id) : raw.products.find(p => p.id === +id);
-  if (item) { item.image = src; commit(); }
+  if (item) { item.image = src; await commit(); }
 }
 
 // ---------- поиск и подписи ----------
@@ -251,8 +261,8 @@ function fullName(p) {
 function sales() { return get().products.filter(p => !p.out && P.onSale(p)); }
 
 module.exports = {
-  get, start, load, search, fullName, sales, thumbOf,
+  get, sync, search, fullName, sales, thumbOf,
   saveProduct, quickProduct, deleteProduct, moveProduct,
   saveCategory, deleteCategory, moveCategory, saveSettings, setImage, InputError,
-  _raw: () => (get(), raw),
+  _raw: async () => (await sync(), raw),
 };

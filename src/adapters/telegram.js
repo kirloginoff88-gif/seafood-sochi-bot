@@ -1,10 +1,8 @@
 // Адаптер Telegram Bot API: апдейты → события бота, экраны → сообщения с клавиатурами.
 const config = require('../config');
-const store = require('../store');
 const bot = require('../bot');
 
 const BASE = () => `https://api.telegram.org/bot${config.telegram.token}/`;
-const replyKbActive = new Set(); // чаты, где сейчас висит клавиатура «Отправить номер/геоточку»
 
 async function api(method, body) {
   const res = await fetch(BASE() + method, {
@@ -23,23 +21,20 @@ async function api(method, body) {
 }
 
 // Экран → параметры сообщения Telegram
-function render(view, chatId) {
+function render(view) {
   const p = { text: view.text || ' ', parse_mode: 'HTML' };
   p.link_preview_options = view.image ? { url: view.image, show_above_text: true, prefer_large_media: false } : { is_disabled: true };
   const rows = view.buttons || [];
   const special = rows.some(r => r.some(b => b.contact || b.location));
   if (special) {
-    // Запрос контакта и геоточки в Telegram возможен только на обычной клавиатуре
-    const map = {};
+    // Запрос контакта и геоточки в Telegram возможен только на обычной клавиатуре.
+    // Нажатия её кнопок приходят текстом — соответствие текст → действие запоминает bot.js
     const keyboard = rows.map(r => r.filter(b => b.contact || b.location || b.cb).map(b => {
       if (b.contact) return { text: b.text, request_contact: true };
       if (b.location) return { text: b.text, request_location: true };
-      map[b.text] = b.cb;
       return { text: b.text };
     })).filter(r => r.length);
     p.reply_markup = { keyboard, resize_keyboard: true, one_time_keyboard: true };
-    p._replyMap = map;
-    replyKbActive.add(String(chatId));
     return p;
   }
   const inline = rows.map(r => r.map(b => {
@@ -48,29 +43,20 @@ function render(view, chatId) {
     return { text: b.text, callback_data: String(b.cb).slice(0, 64) };
   }).filter(Boolean)).filter(r => r.length);
   if (inline.length) p.reply_markup = { inline_keyboard: inline };
-  else if (replyKbActive.has(String(chatId))) { p.reply_markup = { remove_keyboard: true }; replyKbActive.delete(String(chatId)); }
+  else if (view.removeKeyboard) p.reply_markup = { remove_keyboard: true };
   return p;
-}
-
-function rememberReplyMap(chatId, p) {
-  if (!p._replyMap) return;
-  const u = store.user('tg', chatId); // в личке chat_id = user_id
-  u.replyMap = p._replyMap;
-  store.touch();
-  delete p._replyMap;
 }
 
 async function send(target, view) {
   const chatId = target.chatId || target.userId;
-  const p = render(view, chatId);
-  rememberReplyMap(chatId, p);
+  const p = render(view);
   const m = await api('sendMessage', { chat_id: chatId, ...p });
   return { msgId: m.message_id };
 }
 
 async function edit(target, msgId, view) {
   const chatId = target.chatId || target.userId;
-  const p = render(view, chatId);
+  const p = render(view);
   if (p.reply_markup && !p.reply_markup.inline_keyboard) return send(target, view); // обычную клавиатуру нельзя поставить правкой
   try {
     await api('editMessageText', { chat_id: chatId, message_id: msgId, ...p });
@@ -121,6 +107,9 @@ async function handleUpdate(up) {
   }
 }
 
+const UPDATES = ['message', 'callback_query'];
+
+// Команды и кнопка «Магазин»
 async function setup() {
   await api('setMyCommands', { commands: [
     { command: 'menu', description: 'Главное меню' },
@@ -133,13 +122,36 @@ async function setup() {
   }
 }
 
+// Подключить бота к этому серверу через вебхук (так работает на Vercel)
+async function connect() {
+  if (!config.telegram.token) throw new Error('TG_TOKEN не задан');
+  if (!config.publicUrl) throw new Error('Не известен публичный адрес (PUBLIC_URL)');
+  const me = await api('getMe');
+  await setup();
+  await api('setWebhook', { url: `${config.publicUrl}/webhook/tg`, secret_token: config.telegram.webhookSecret, allowed_updates: UPDATES, max_connections: 10 });
+  return status(me);
+}
+
+async function status(me) {
+  if (!config.telegram.token) return { enabled: false };
+  me = me || (await api('getMe'));
+  const info = await api('getWebhookInfo');
+  const expected = `${config.publicUrl}/webhook/tg`;
+  return {
+    enabled: true, username: me.username, link: `https://t.me/${me.username}`,
+    webhook: info.url || '', connected: !!info.url && info.url === expected,
+    pending: info.pending_update_count || 0,
+    lastError: info.last_error_message ? `${info.last_error_message} (${new Date(info.last_error_date * 1000).toLocaleString('ru-RU')})` : '',
+  };
+}
+
 let stopped = false;
 async function poll() {
   await api('deleteWebhook', { drop_pending_updates: false }).catch(() => {});
   let offset = 0;
   while (!stopped) {
     try {
-      const ups = await api('getUpdates', { offset, timeout: 30, allowed_updates: ['message', 'callback_query'] });
+      const ups = await api('getUpdates', { offset, timeout: 30, allowed_updates: UPDATES });
       for (const up of ups) { offset = up.update_id + 1; await handleUpdate(up); }
     } catch (e) {
       console.error('[tg] polling:', e.message);
@@ -148,23 +160,25 @@ async function poll() {
   }
 }
 
+// Запуск на обычном сервере: polling или вебхук
 async function start() {
   if (!config.telegram.token) return console.log('[tg] TG_TOKEN не задан — Telegram выключен');
-  const me = await api('getMe');
-  console.log(`[tg] бот @${me.username} запущен (${config.telegram.mode})`);
-  await setup();
   if (config.telegram.mode === 'webhook') {
-    await api('setWebhook', { url: `${config.publicUrl}/webhook/tg`, secret_token: config.telegram.webhookSecret, allowed_updates: ['message', 'callback_query'] });
+    const st = await connect();
+    console.log(`[tg] бот @${st.username} подключён через вебхук`);
   } else {
+    const me = await api('getMe');
+    await setup();
+    console.log(`[tg] бот @${me.username} запущен (polling)`);
     poll();
   }
 }
 
-// Вебхук: проверяем секрет из заголовка
-function webhook(headers, body) {
+// Вебхук: проверяем секрет из заголовка и обрабатываем до ответа
+async function webhook(headers, body) {
   if (headers['x-telegram-bot-api-secret-token'] !== config.telegram.webhookSecret) return false;
-  handleUpdate(body);
+  await handleUpdate(body);
   return true;
 }
 
-module.exports = { start, send, edit, handleUpdate, webhook, render, api, stop: () => { stopped = true; } };
+module.exports = { start, connect, status, send, edit, handleUpdate, webhook, render, api, stop: () => { stopped = true; } };

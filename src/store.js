@@ -1,90 +1,76 @@
-// Простое хранилище в JSON-файле: сессии покупателей, корзины, заказы, менеджеры.
-// Для пилота на сотни заказов в месяц этого достаточно; при росте — заменить на SQLite/Postgres.
-const fs = require('fs');
-const path = require('path');
+// Покупатели, корзины, заказы, менеджеры, вопросы — поверх db (файл или Redis).
+// Ключи: user:<платформа>:<id>, order:<№>, orders (список №), seq:order, managers, q:<id>, seq:q
+const db = require('./db');
 const config = require('./config');
 
-const file = path.join(config.dataDir, 'store.json');
-let db = { seq: 1000, users: {}, orders: {}, managers: [], questions: {} };
-try { db = { ...db, ...JSON.parse(fs.readFileSync(file, 'utf8')) }; } catch {}
+const ORDER_BASE = 1000; // номера заказов начинаются с 1001
 
-let timer = null;
-function save() {
-  if (timer) return;
-  timer = setTimeout(() => {
-    timer = null;
-    fs.mkdirSync(config.dataDir, { recursive: true });
-    const tmp = file + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(db, null, 1));
-    fs.renameSync(tmp, file);
-  }, 300);
+async function getUser(platform, userId) {
+  const key = `user:${platform}:${userId}`;
+  const u = (await db.get(key)) || { platform, userId: String(userId), cart: {}, step: null, draft: {}, profile: {}, orderIds: [], createdAt: Date.now() };
+  u.cart ||= {}; u.draft ||= {}; u.profile ||= {}; u.orderIds ||= [];
+  return u;
 }
-function flush() {
-  if (timer) { clearTimeout(timer); timer = null; }
-  fs.mkdirSync(config.dataDir, { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(db, null, 1));
+async function saveUser(u) {
+  await db.set(`user:${u.platform}:${u.userId}`, u);
 }
 
-const key = (platform, userId) => `${platform}:${userId}`;
-
-// Пользователь один на платформу: корзина общая для чата и мини-приложения
-function user(platform, userId, patch) {
-  const k = key(platform, userId);
-  if (!db.users[k]) db.users[k] = { platform, userId: String(userId), cart: {}, step: null, draft: {}, profile: {}, createdAt: Date.now() };
-  if (patch) { Object.assign(db.users[k], patch); save(); }
-  return db.users[k];
+async function newOrder(data) {
+  const id = ORDER_BASE + (await db.incr('seq:order'));
+  const o = { id, status: 'new', createdAt: Date.now(), history: [{ at: Date.now(), status: 'new' }], ...data };
+  await db.set(`order:${id}`, o);
+  await db.lpush('orders', id);
+  return o;
 }
-function touch() { save(); }
-
-function newOrder(data) {
-  db.seq += 1;
-  const id = db.seq;
-  db.orders[id] = { id, status: 'new', createdAt: Date.now(), history: [{ at: Date.now(), status: 'new' }], ...data };
-  save();
-  return db.orders[id];
-}
-const order = id => db.orders[id] || null;
-function setOrder(id, patch) {
-  const o = db.orders[id];
+const order = id => db.get(`order:${+id}`);
+async function setOrder(id, patch) {
+  const o = await order(id);
   if (!o) return null;
   if (patch.status && patch.status !== o.status) o.history.push({ at: Date.now(), status: patch.status, by: patch.by });
   Object.assign(o, patch);
-  save();
+  await db.set(`order:${o.id}`, o);
   return o;
 }
-function lastOrders(platform, userId, n = 3) {
-  return Object.values(db.orders).filter(o => o.platform === platform && String(o.userId) === String(userId))
-    .sort((a, b) => b.id - a.id).slice(0, n);
+async function listOrders(limit = 200) {
+  const ids = await db.lrange('orders', 0, limit - 1);
+  return (await db.mget(ids.map(id => `order:${id}`))).filter(Boolean);
+}
+async function ordersByIds(ids) {
+  return (await db.mget(ids.map(id => `order:${id}`))).filter(Boolean);
 }
 
-// Менеджеры: те, кто ввёл /manager PIN, плюс заданные в .env
-function managers() {
+// Менеджеры: подключённые командой /manager плюс заданные в .env
+async function managers() {
   const fromEnv = [
     ...config.telegram.managers.map(chatId => ({ platform: 'tg', chatId })),
     ...config.max.managers.map(chatId => ({ platform: 'max', chatId })),
   ];
-  const all = [...fromEnv, ...db.managers];
+  const all = [...fromEnv, ...((await db.get('managers')) || [])];
   const seen = new Set();
   return all.filter(m => { const k = m.platform + ':' + m.chatId; if (seen.has(k)) return false; seen.add(k); return true; });
 }
-function addManager(platform, chatId, name) {
-  if (!db.managers.find(m => m.platform === platform && String(m.chatId) === String(chatId))) {
-    db.managers.push({ platform, chatId: String(chatId), name, at: Date.now() });
-    save();
+async function addManager(platform, chatId, name) {
+  const list = (await db.get('managers')) || [];
+  if (!list.find(m => m.platform === platform && String(m.chatId) === String(chatId))) {
+    list.push({ platform, chatId: String(chatId), name, at: Date.now() });
+    await db.set('managers', list);
   }
 }
-function removeManager(platform, chatId) {
-  db.managers = db.managers.filter(m => !(m.platform === platform && String(m.chatId) === String(chatId)));
-  save();
+async function removeManager(platform, chatId) {
+  const list = (await db.get('managers')) || [];
+  await db.set('managers', list.filter(m => !(m.platform === platform && String(m.chatId) === String(chatId))));
 }
-const isManager = (platform, chatId) => managers().some(m => m.platform === platform && String(m.chatId) === String(chatId));
-
-function newQuestion(data) {
-  const id = 'q' + (Object.keys(db.questions).length + 1);
-  db.questions[id] = { id, at: Date.now(), answered: false, ...data };
-  save();
-  return db.questions[id];
+async function isManager(platform, chatId) {
+  return (await managers()).some(m => m.platform === platform && String(m.chatId) === String(chatId));
 }
-const question = id => db.questions[id] || null;
 
-module.exports = { user, touch, newOrder, order, setOrder, lastOrders, managers, addManager, removeManager, isManager, newQuestion, question, flush, _db: () => db };
+async function newQuestion(data) {
+  const id = 'q' + (await db.incr('seq:q'));
+  const q = { id, at: Date.now(), answered: false, ...data };
+  await db.set(`q:${id}`, q);
+  return q;
+}
+const question = id => db.get(`q:${id}`);
+const saveQuestion = q => db.set(`q:${q.id}`, q);
+
+module.exports = { getUser, saveUser, newOrder, order, setOrder, listOrders, ordersByIds, managers, addManager, removeManager, isManager, newQuestion, question, saveQuestion, flush: db.flush };
