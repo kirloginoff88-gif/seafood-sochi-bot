@@ -197,7 +197,7 @@ label.f small{font-weight:500;color:var(--muted)}
 <div id="app" hidden>
   <header>
     <div class="wrap">
-      <div class="hd"><b id="brand">Seafood Сочи</b><small>управление магазином</small><span class="sp"></span><a href="/app/?p=web" target="_blank" rel="noopener">Открыть магазин ↗</a><button id="logout" type="button">Выйти</button></div>
+      <div class="hd"><b id="brand">Seafood Сочи</b><small>управление магазином</small><span class="sp"></span><a href="/" target="_blank" rel="noopener">Открыть магазин ↗</a><button id="logout" type="button">Выйти</button></div>
       <nav class="tabs" id="tabs">
         <button class="tab on" data-tab="products" type="button">Товары</button>
         <button class="tab" data-tab="cats" type="button">Категории</button>
@@ -448,7 +448,7 @@ function renderConn(st){
   var el=$('conn'); if(!el) return;
   if(!st){ el.innerHTML='<h3>Подключение</h3><p class="muted">Проверяем…</p>'; return; }
   el.innerHTML='<h3>Подключение</h3><div class="bot">'+botLine('Telegram',st.tg)+botLine('MAX',st.max)+
-    '<span class="muted">Адрес</span><span>'+(st.publicUrl?'<a href="'+esc(st.publicUrl)+'/app/?p=web" target="_blank" rel="noopener">'+esc(st.publicUrl)+'</a>':'не задан')+'</span>'+
+    '<span class="muted">Магазин для покупателей</span><span>'+(st.publicUrl?'<a href="'+esc(st.publicUrl)+'" target="_blank" rel="noopener">'+esc(st.publicUrl.replace(/^https:\/\//,''))+'</a>':'не задан')+'</span>'+
     '<span class="muted">Хранилище</span><span>'+(st.storage==='redis'?'Redis (Upstash)':(st.serverless?'<b style="color:var(--coral)">не подключено — подключите Upstash в Vercel: Storage → Upstash, иначе заказы и правки пропадут</b>':'файл на сервере'))+'</span></div>'+
     '<div class="acts"><button class="btn sm" type="button" data-connect>Подключить ботов</button>'+
     (st.externalImages?'<button class="btn ghost sm" type="button" data-import>Перенести фото к себе ('+st.externalImages+')</button>':'')+'</div>'+

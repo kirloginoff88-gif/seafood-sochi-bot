@@ -69,7 +69,13 @@ async function route(req, res) {
   const url = new URL(req.url, 'http://x');
   const p = url.pathname;
 
-  if (req.method === 'GET' && (p === '/' || p === '/health')) {
+  // Главная страница — сразу магазин: эту ссылку можно отправлять покупателям
+  if (req.method === 'GET' && (p === '/' || p === '/shop')) {
+    res.writeHead(302, { Location: '/app/' + url.search, 'Cache-Control': 'no-cache' });
+    return res.end();
+  }
+
+  if (req.method === 'GET' && p === '/health') {
     await catalog.sync();
     return json(res, 200, { ok: true, products: catalog.get().products.length, storage: db.kind, admin: !!config.admin.password });
   }

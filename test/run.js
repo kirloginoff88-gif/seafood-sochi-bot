@@ -346,6 +346,8 @@ test('API мини-приложения на Vercel: каталог, сесси�
     assert.match((await req('GET', '/app/pricing.js')).body, /Pricing/);
     assert.equal((await req('GET', '/app/../src/config.js')).status, 404);
     assert.equal((await req('GET', '/health')).body.storage, db.kind);
+    const home = await req('GET', '/');
+    assert.equal(home.status, 302); assert.equal(home.headers.location, '/app/', 'главная ведёт в магазин');
 
     const initData = sign({ auth_date: String(Math.floor(Date.now() / 1000)), query_id: 'x', user: JSON.stringify({ id: 555, first_name: 'Мария', username: 'masha' }) }, 'max-test-token');
     assert.equal((await req('POST', '/api/session', { platform: 'max', initData: initData + 'x' })).status, 401);
