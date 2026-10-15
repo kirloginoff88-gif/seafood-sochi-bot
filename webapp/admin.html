@@ -169,6 +169,41 @@ label.f small{font-weight:500;color:var(--muted)}
 .foot{display:flex;gap:8px;flex-wrap:wrap;align-items:center;position:sticky;bottom:calc(-18px - env(safe-area-inset-bottom,0px));background:var(--bg);padding-block:12px calc(4px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line);margin-top:4px}
 .foot .sp{flex:1}
 
+/* акции */
+.promos{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+.pcard{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;display:flex;flex-direction:column}
+.pcard.off .ban{filter:grayscale(.8);opacity:.6}
+.pcard .bd{padding:10px 12px 12px;display:flex;flex-direction:column;gap:8px}
+.pcard .bd .r{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ban{position:relative;aspect-ratio:2/1;border-radius:0;overflow:hidden;color:#fff;display:flex;flex-direction:column;justify-content:flex-end;padding:12px 14px;cursor:pointer;background:var(--sea)}
+.ban img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.ban::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 30%,rgba(0,0,0,.6))}
+.ban.noimg::after{background:radial-gradient(circle at 85% 15%,rgba(255,255,255,.22),transparent 45%)}
+.ban>*:not(img){position:relative;z-index:1}
+.ban .bdg{align-self:flex-start;margin-bottom:auto;background:rgba(255,255,255,.92);color:#0E1C26;font-size:10.5px;font-weight:800;padding:2px 8px;border-radius:12px;text-transform:uppercase}
+.ban h4{font-size:17px;line-height:1.15;font-weight:800}
+.ban p{font-size:12px;opacity:.9;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ban.big{border-radius:14px;aspect-ratio:2/1}
+.colors{display:flex;gap:8px;flex-wrap:wrap}
+.colors button{width:30px;height:30px;border-radius:50%;border:3px solid transparent;box-shadow:0 0 0 1px var(--line)}
+.colors button.on{border-color:var(--card);box-shadow:0 0 0 2px var(--ink)}
+/* покупатели */
+.cu{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:11px 12px;border-bottom:1px solid var(--line)}
+.cu:last-child{border-bottom:0}
+.cu b{color:var(--ink)}
+.cu small{display:block;color:var(--muted);font-size:12.5px}
+.cu .bal{font-weight:800;color:var(--ink);font-size:16px;text-align:right;white-space:nowrap}
+.cu .bal small{font-weight:600}
+.cu .adj{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap;align-items:center;background:var(--bg);border-radius:10px;padding:8px}
+.cu .adj .in{width:auto;flex:1 1 120px}
+.cu .adj .in.n{flex:0 0 110px}
+.hist{grid-column:1/-1;font-size:12.5px;display:flex;flex-direction:column;gap:3px}
+.hist div{display:flex;justify-content:space-between;gap:8px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px}
+.stats div{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px}
+.stats b{display:block;font-size:22px;color:var(--ink)}
+.stats small{color:var(--muted);font-size:12px;font-weight:600}
+.form h3{font-size:16px;color:var(--ink)}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:60;background:var(--ink);color:var(--bg);font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:12px;max-width:90vw;text-align:center}
 .toast.bad{background:var(--coral);color:#fff}
 .empty{padding:36px 16px;text-align:center;color:var(--muted)}
@@ -202,6 +237,8 @@ label.f small{font-weight:500;color:var(--muted)}
         <button class="tab on" data-tab="products" type="button">Товары</button>
         <button class="tab" data-tab="cats" type="button">Категории</button>
         <button class="tab" data-tab="orders" type="button">Заказы<span class="n" id="newCount" hidden></span></button>
+        <button class="tab" data-tab="promos" type="button">Акции</button>
+        <button class="tab" data-tab="customers" type="button">Покупатели</button>
         <button class="tab" data-tab="settings" type="button">Настройки</button>
       </nav>
     </div>
@@ -210,6 +247,8 @@ label.f small{font-weight:500;color:var(--muted)}
     <section id="t-products"></section>
     <section id="t-cats" hidden></section>
     <section id="t-orders" hidden></section>
+    <section id="t-promos" hidden></section>
+    <section id="t-customers" hidden></section>
     <section id="t-settings" hidden></section>
   </main>
 </div>
@@ -223,7 +262,7 @@ label.f small{font-weight:500;color:var(--muted)}
 (function(){
 'use strict';
 var P = window.Pricing;
-var S = { cats:[], products:[], settings:{} };
+var S = { cats:[], products:[], settings:{}, promos:[] };
 var ui = { tab:'products', q:'', cid:'', filter:'all', ordersFilter:'active' };
 function $(id){ return document.getElementById(id); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
@@ -233,7 +272,7 @@ function api(path, body){
     .then(function(r){ return r.json().catch(function(){return {ok:false,error:'Ошибка сервера'};}).then(function(j){
       if(r.status===401 && path!=='login'){ showLogin(); throw new Error('auth'); }
       if(!j.ok) throw new Error(j.error||'Не получилось');
-      if(j.products){ S.cats=j.cats; S.products=j.products; S.settings=j.settings; }
+      if(j.products){ S.cats=j.cats; S.products=j.products; S.settings=j.settings; S.promos=j.promos||[]; }
       return j; }); });
 }
 function fail(e){ if(e.message!=='auth') toast(e.message,true); }
@@ -255,10 +294,10 @@ $('tabs').addEventListener('click',function(e){
   var b=e.target.closest('[data-tab]'); if(!b) return;
   ui.tab=b.dataset.tab;
   document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t===b);});
-  ['products','cats','orders','settings'].forEach(function(t){ $('t-'+t).hidden=t!==ui.tab; });
+  ['products','cats','orders','promos','customers','settings'].forEach(function(t){ $('t-'+t).hidden=t!==ui.tab; });
   render();
 });
-function render(){ ({products:renderProducts,cats:renderCats,orders:loadOrders,settings:renderSettings})[ui.tab](); $('brand').textContent=S.settings.brand||'Seafood Сочи'; }
+function render(){ ({products:renderProducts,cats:renderCats,orders:loadOrders,promos:renderPromos,customers:loadCustomers,settings:renderSettings})[ui.tab](); $('brand').textContent=S.settings.brand||'Seafood Сочи'; }
 
 /* ---------- товары ---------- */
 function unitLabel(p){ return p.unit==='кг' ? '₽/кг' : '₽/шт'; }
@@ -327,7 +366,7 @@ function openProduct(id){
   drawProduct(); $('modal').hidden=false; document.body.style.overflow='hidden';
   setTimeout(function(){ if(!id) $('f-name').focus(); },50);
 }
-function closeModal(){ $('modal').hidden=true; document.body.style.overflow=''; F=null; }
+function closeModal(){ $('modal').hidden=true; document.body.style.overflow=''; F=null; PF=null; }
 function previewText(){
   var p=toProduct(); if(!p.name) return 'Заполните название и цену';
   if(!(p.price>0)) return '<b>'+esc(p.name)+'</b> — цена по запросу (покупатель задаст вопрос в чате)';
@@ -428,7 +467,9 @@ function renderOrders(){
     return '<article class="oc"><div class="top"><div><b>№'+o.id+'</b><small>'+fmtDate(o.createdAt)+' · '+(SRC[o.platform]||o.platform)+', '+(o.source==='app'?'приложение':o.source==='web'?'сайт':'чат')+(o.verified?'':' · ⚠️ не подтверждён мессенджером')+'</small></div><span class="pill '+o.status+'">'+esc(st.label)+'</span></div>'+
       '<dl class="kv"><dt>Клиент</dt><dd>'+esc(o.customer.name)+(o.customer.username?' (@'+esc(o.customer.username)+')':'')+'</dd><dt>Телефон</dt><dd>'+esc(o.customer.phone)+'</dd><dt>Адрес</dt><dd>'+esc(o.address)+'</dd><dt>Когда</dt><dd>'+esc(o.time)+'</dd><dt>Оплата</dt><dd>'+esc(o.pay)+'</dd>'+(o.comment?'<dt>Коммент.</dt><dd>'+esc(o.comment)+'</dd>':'')+'</dl>'+
       '<div class="lines">'+o.lines.map(function(l){return '<div><span>'+esc(l.name)+' · '+esc(l.qtyLabel)+'</span><span>'+(l.ask?'по запросу':(l.approx?'≈ ':'')+P.rub(l.sum))+'</span></div>';}).join('')+
-      '<div class="tot"><span>'+(o.finalSum?'Итог по весу':'Примерно')+'</span><span>'+P.rub(o.finalSum||o.sum)+'</span></div></div>'+
+      '<div class="tot"><span>'+(o.finalSum?'Итог по весу':'Примерно')+'</span><span>'+P.rub(o.finalSum||o.sum)+'</span></div>'+
+      (o.bonusUsed?'<div><span>💎 Оплачено бонусами</span><span>−'+P.rub(o.bonusUsed)+'</span></div><div class="tot"><span>К оплате</span><span>'+P.rub(Math.max(0,(o.finalSum||o.sum)-o.bonusUsed))+'</span></div>':'')+
+      (o.bonusEarned?'<div class="muted"><span>Начислено кешбэком: '+o.bonusEarned+' бонусов</span></div>':'')+'</div>'+
       (closed?'':'<div class="oact">'+acts.map(function(a){return '<button class="btn sm'+(a[0]==='canceled'?' danger':a[0]==='confirmed'?'':' ghost')+'" type="button" data-ost="'+o.id+'" data-st="'+a[0]+'">'+a[1]+'</button>';}).join('')+
       '<span class="fs"><input class="in" type="number" inputmode="numeric" placeholder="Итог, ₽" data-osum="'+o.id+'" aria-label="Итог по весу"><button class="btn ghost sm" type="button" data-osend="'+o.id+'">Отправить итог</button></span></div>')+
       '</article>';
@@ -457,10 +498,19 @@ function renderConn(st){
 function loadConn(){ renderConn(null); api('bots').then(renderConn).catch(function(x){ fail(x); }); }
 function renderSettings(){
   var s=S.settings;
+  function bv(k,d){ return s[k]===undefined||s[k]===''?d:s[k]; }
   $('t-settings').innerHTML='<section class="conn" id="conn"></section><form class="form" id="sf">'+SET_FIELDS.map(function(f){
     var hint=f[3]?' <small>'+f[3]+'</small>':'';
     return '<label class="f">'+f[1]+hint+(f[2]==='area'?'<textarea class="in" name="'+f[0]+'">'+esc(s[f[0]]||'')+'</textarea>':'<input class="in" name="'+f[0]+'" type="'+f[2]+'" value="'+esc(s[f[0]]||'')+'">')+'</label>';
-  }).join('')+'<div><button class="btn" type="submit">Сохранить</button></div></form>';
+  }).join('')+
+  '<h3 style="margin-top:6px">💎 Бонусы и приглашения</h3>'+
+  '<label class="f">Бонусная программа<select class="in" name="bonus_enabled"><option value="1"'+(bv('bonus_enabled','1')!=='0'?' selected':'')+'>Включена</option><option value="0"'+(bv('bonus_enabled','1')==='0'?' selected':'')+'>Выключена</option></select></label>'+
+  '<div class="row2"><label class="f">Кешбэк с заказа, % <small>после статуса «Доставлен»</small><input class="in" type="number" min="0" max="50" name="bonus_cashback" value="'+esc(bv('bonus_cashback',5))+'"></label>'+
+  '<label class="f">Оплата бонусами, до % заказа<input class="in" type="number" min="0" max="100" name="bonus_max_pay" value="'+esc(bv('bonus_max_pay',30))+'"></label>'+
+  '<label class="f">Подарок другу по ссылке, бонусов<input class="in" type="number" min="0" name="bonus_welcome" value="'+esc(bv('bonus_welcome',300))+'"></label>'+
+  '<label class="f">Награда пригласившему, бонусов <small>после первого доставленного заказа друга</small><input class="in" type="number" min="0" name="bonus_referrer" value="'+esc(bv('bonus_referrer',500))+'"></label></div>'+
+  '<p class="muted">1 бонус = 1 ₽. Если заказ отменён, списанные бонусы возвращаются покупателю автоматически.</p>'+
+  '<div><button class="btn" type="submit">Сохранить</button></div></form>';
   loadConn();
 }
 $('t-settings').addEventListener('submit',function(e){
@@ -468,6 +518,117 @@ $('t-settings').addEventListener('submit',function(e){
   new FormData(e.target).forEach(function(v,k){ data[k]=v; });
   api('settings/save',{settings:data}).then(function(){ toast('Настройки сохранены'); render(); }).catch(fail);
 });
+
+/* ---------- акции ---------- */
+var PF=null; // черновик акции
+var PCOLORS=['#0E7C86','#E4572E','#1F3A5F','#7A4FB5','#C99A2E','#2E8B57','#0E1C26'];
+var LINK_LABELS={none:'Без кнопки',sale:'Экран «Акции»',product:'Товар',category:'Раздел каталога',account:'Личный кабинет (бонусы)',url:'Внешняя ссылка'};
+function today(){ return P.today(); }
+function promoState(x){
+  if(!x.active) return ['скрыта',''];
+  var t=today();
+  if(x.from && x.from>t) return ['с '+fmtD(x.from),'sale'];
+  if(x.to && x.to<t) return ['завершена',''];
+  return ['показывается','ask'];
+}
+function fmtD(s){ return s? s.slice(8,10)+'.'+s.slice(5,7)+'.'+s.slice(0,4) : ''; }
+function banHtml(x,i,big){
+  var col=x.color||PCOLORS[i%PCOLORS.length];
+  return '<div class="ban'+(x.image?'':' noimg')+(big?' big':'')+'" style="background:'+esc(col)+'"'+(big?'':' data-pedit="'+esc(x.id)+'"')+'>'+(x.image?'<img src="'+esc(x.image)+'" alt="">':'')+
+    (x.badge?'<span class="bdg">'+esc(x.badge)+'</span>':'<span></span>')+'<h4>'+esc(x.title||'Заголовок акции')+'</h4><p>'+esc(x.text||'')+'</p></div>';
+}
+function renderPromos(){
+  var h='<div class="toolbar"><button class="btn" type="button" data-pnew>+ Акция</button><span class="muted">Баннеры в магазине и разделе «Акции» бота. Порядок — как здесь. Скидки на отдельные товары задаются в карточке товара.</span></div>';
+  if(!S.promos.length) h+='<div class="empty">Акций пока нет. Нажмите «+ Акция», загрузите картинку и напишите условия.</div>';
+  h+='<div class="promos">'+S.promos.map(function(x,i){
+    var st=promoState(x);
+    return '<div class="pcard'+(st[0]==='показывается'?'':' off')+'">'+banHtml(x,i)+'<div class="bd">'+
+      '<div class="tags"><span class="tag '+st[1]+'">'+st[0]+'</span>'+(x.from||x.to?'<span class="tag">'+(x.from?fmtD(x.from):'…')+' — '+(x.to?fmtD(x.to):'…')+'</span>':'')+(x.popup?'<span class="tag sale">всплывает</span>':'')+(x.link_type!=='none'?'<span class="tag">→ '+esc(LINK_LABELS[x.link_type]||'')+'</span>':'')+'</div>'+
+      '<div class="r"><label class="sw"><input type="checkbox" data-pact="'+esc(x.id)+'"'+(x.active?' checked':'')+'><i></i>'+(x.active?'включена':'выключена')+'</label>'+
+      '<span class="mv"><button type="button" data-pmove="'+esc(x.id)+'" data-dir="-1" aria-label="Выше">▲</button><button type="button" data-pmove="'+esc(x.id)+'" data-dir="1" aria-label="Ниже">▼</button></span>'+
+      '<button class="btn ghost sm" type="button" data-pedit="'+esc(x.id)+'">Изменить</button></div></div></div>';
+  }).join('')+'</div>';
+  $('t-promos').innerHTML=h;
+}
+function openPromo(id){
+  var x=id?S.promos.find(function(y){return y.id===id;}):null;
+  PF=Object.assign({id:'',title:'',text:'',badge:'',image:'',btn:'',link_type:'none',link_id:'',color:'',from:'',to:'',active:1,popup:0}, x||{});
+  PF._sure=false; PF._i=x?S.promos.indexOf(x):S.promos.length;
+  drawPromo(); $('modal').hidden=false; document.body.style.overflow='hidden';
+}
+function drawPromo(){
+  var f=PF, lt=f.link_type;
+  var target='';
+  if(lt==='product') target='<label class="f">Какой товар открыть<select class="in" data-pf="link_id"><option value="">— выберите —</option>'+S.cats.map(function(c){ return '<optgroup label="'+esc(c.name)+'">'+S.products.filter(function(p){return p.cid===c.cid;}).map(function(p){return '<option value="'+p.id+'"'+(String(p.id)===String(f.link_id)?' selected':'')+'>'+esc(p.name+(p.note?' · '+p.note:''))+'</option>';}).join('')+'</optgroup>'; }).join('')+'</select></label>';
+  if(lt==='category') target='<label class="f">Какой раздел открыть<select class="in" data-pf="link_id"><option value="">— выберите —</option>'+S.cats.map(function(c){return '<option value="'+c.cid+'"'+(c.cid===f.link_id?' selected':'')+'>'+c.emoji+' '+esc(c.name)+'</option>';}).join('')+'</select></label>';
+  if(lt==='url') target='<label class="f">Ссылка<input class="in" data-pf="link_id" value="'+esc(f.link_id)+'" placeholder="https://"></label>';
+  $('pan').innerHTML='<button class="x" type="button" data-close aria-label="Закрыть">×</button><h2>'+(f.id?'Акция':'Новая акция')+'</h2>'+
+  '<form id="prf" novalidate>'+
+  '<div id="pprev">'+banHtml(f,f._i,true)+'</div>'+
+  '<div class="toolbar" style="margin:0"><button class="btn ghost sm" type="button" data-photo="promo">'+(f.image?'Заменить картинку':'Загрузить картинку')+'</button>'+(f.image?'<button class="btn ghost sm" type="button" data-pnophoto>Убрать картинку</button>':'')+'<span class="muted">Горизонтальная, примерно 2:1 (например 1200×600). Без картинки — цветной фон.</span></div>'+
+  (f.image?'':'<div class="f" style="display:flex;flex-direction:column;gap:6px"><b style="font-size:13px;color:var(--ink)">Цвет фона</b><div class="colors">'+PCOLORS.map(function(c,i){ var on=(f.color||PCOLORS[f._i%PCOLORS.length])===c; return '<button type="button" data-pcolor="'+c+'" class="'+(on?'on':'')+'" style="background:'+c+'" aria-label="Цвет '+(i+1)+'"></button>'; }).join('')+'</div></div>')+
+  '<label class="f">Заголовок<input class="in" id="pf-title" data-pf="title" maxlength="80" value="'+esc(f.title)+'" placeholder="Скидка 15% на креветки"></label>'+
+  '<label class="f">Условия <small>— видно в окне акции</small><textarea class="in" data-pf="text" maxlength="600" placeholder="До воскресенья все креветки со скидкой 15%. Количество ограничено.">'+esc(f.text)+'</textarea></label>'+
+  '<div class="row2"><label class="f">Ярлык <small>необязательно</small><input class="in" data-pf="badge" maxlength="24" value="'+esc(f.badge)+'" placeholder="−15%"></label>'+
+  '<label class="f">Текст кнопки <small>необязательно</small><input class="in" data-pf="btn" maxlength="30" value="'+esc(f.btn)+'" placeholder="Выбрать креветки"></label></div>'+
+  '<label class="f">Кнопка ведёт<select class="in" data-pf="link_type">'+Object.keys(LINK_LABELS).map(function(k){return '<option value="'+k+'"'+(k===lt?' selected':'')+'>'+LINK_LABELS[k]+'</option>';}).join('')+'</select></label>'+target+
+  '<div class="row2"><label class="f">Показывать с <small>пусто — сразу</small><input class="in" type="date" data-pf="from" value="'+esc(f.from)+'"></label><label class="f">По <small>включительно; пусто — бессрочно</small><input class="in" type="date" data-pf="to" value="'+esc(f.to)+'"></label></div>'+
+  '<label class="sw"><input type="checkbox" data-pfc="active"'+(f.active?' checked':'')+'><i></i><span style="color:var(--ink);font-size:13.5px">Включена — показывать покупателям</span></label>'+
+  '<label class="sw"><input type="checkbox" data-pfc="popup"'+(f.popup?' checked':'')+'><i></i><span style="color:var(--ink);font-size:13.5px">Всплывающее окно при входе в магазин (один раз для каждого покупателя)</span></label>'+
+  '<div class="err" id="prerr" hidden></div>'+
+  '<div class="foot"><button class="btn" type="submit">Сохранить</button><button class="btn ghost" type="button" data-close>Отмена</button><span class="sp"></span>'+
+  (f.id?'<button class="btn danger'+(f._sure?' sure':'')+'" type="button" data-pdel>'+(f._sure?'Точно удалить?':'Удалить')+'</button>':'')+'</div></form>';
+}
+$('pan').addEventListener('input',function(e){
+  if(!PF) return; var k=e.target.dataset.pf; if(!k) return;
+  PF[k]=e.target.value; if(['title','text','badge'].indexOf(k)!==-1) $('pprev').innerHTML=banHtml(PF,PF._i,true);
+});
+$('pan').addEventListener('change',function(e){
+  if(!PF) return; var t=e.target;
+  if(t.dataset.pfc){ PF[t.dataset.pfc]=t.checked?1:0; return; }
+  if(t.dataset.pf==='link_type'){ PF.link_type=t.value; PF.link_id=''; return drawPromo(); }
+  if(t.dataset.pf) PF[t.dataset.pf]=t.value;
+});
+$('pan').addEventListener('submit',function(e){
+  if(!PF || !$('prf')) return; e.preventDefault();
+  var err=$('prerr'); err.hidden=true;
+  var x={}; ['id','title','text','badge','image','btn','link_type','link_id','color','from','to','active','popup'].forEach(function(k){ x[k]=PF[k]; });
+  if(!String(x.title).trim()){ err.textContent='Укажите заголовок'; err.hidden=false; return; }
+  api('promo/save',{promo:x}).then(function(){ closeModal(); toast(x.id?'Акция сохранена':'Акция добавлена'); renderPromos(); })
+    .catch(function(y){ if(y.message==='auth') return; err.textContent=y.message; err.hidden=false; });
+});
+$('t-promos').addEventListener('change',function(e){
+  var id=e.target.dataset.pact; if(!id) return;
+  var x=S.promos.find(function(y){return y.id===id;}); if(!x) return;
+  api('promo/save',{promo:Object.assign({},x,{active:e.target.checked?1:0})}).then(function(){ toast(e.target.checked?'Акция включена':'Акция скрыта'); renderPromos(); }).catch(function(y){ fail(y); renderPromos(); });
+});
+
+/* ---------- покупатели ---------- */
+var CUS=[], cq='', openHist={};
+function loadCustomers(){
+  $('t-customers').innerHTML='<div class="empty">Загружаем…</div>';
+  api('customers').then(function(j){ CUS=j.customers; renderCustomers(); }).catch(fail);
+}
+function renderCustomers(){
+  var el=$('t-customers'), focus=document.activeElement && document.activeElement.id==='cq';
+  var list=CUS.filter(function(c){ if(!cq) return true; return (c.name+' '+c.username+' '+c.phone+' '+c.refCode).toLowerCase().indexOf(cq)!==-1; });
+  var buyers=CUS.filter(function(c){return c.orders>0;}).length, bonus=CUS.reduce(function(s,c){return s+c.balance;},0), refs=CUS.filter(function(c){return c.referred;}).length;
+  var h='<div class="stats"><div><b>'+CUS.length+'</b><small>открывали бота</small></div><div><b>'+buyers+'</b><small>сделали заказ</small></div><div><b>'+refs+'</b><small>пришли по приглашению</small></div><div><b>'+P.ru(bonus)+'</b><small>бонусов на счетах</small></div></div>'+
+    '<div class="toolbar"><input class="in" id="cq" type="search" placeholder="Имя, @ник, телефон или код" value="'+esc(cq)+'"><button class="btn ghost sm" type="button" data-creload>Обновить</button></div>';
+  if(!list.length) h+='<div class="empty">'+(CUS.length?'Никого не нашли':'Покупателей пока нет — они появятся, когда откроют бота')+'</div>';
+  else h+='<div class="list">'+list.slice(0,300).map(function(c){
+    var hist=openHist[c.key];
+    return '<div class="cu"><div><b>'+esc(c.name||'Без имени')+'</b>'+(c.username?' <span class="muted">@'+esc(c.username)+'</span>':'')+
+      '<small>'+(c.platform==='tg'?'Telegram':'MAX')+(c.phone?' · '+esc(c.phone):'')+' · заказов: '+c.orders+(c.refCount?' · пригласил: '+c.refCount:'')+(c.referred?' · по приглашению':'')+(c.refCode?' · код '+esc(c.refCode):'')+'</small></div>'+
+      '<div class="bal">'+c.balance+' <small>💎</small></div>'+
+      '<div class="adj"><input class="in n" type="number" inputmode="numeric" placeholder="+200 / −200" data-camt="'+esc(c.key)+'"><input class="in" placeholder="Причина (увидит покупатель)" maxlength="120" data-crsn="'+esc(c.key)+'"><button class="btn sm" type="button" data-cbonus="'+esc(c.key)+'">Начислить / списать</button><button class="btn ghost sm" type="button" data-chist="'+esc(c.key)+'">'+(hist?'Скрыть историю':'История')+'</button></div>'+
+      (hist?'<div class="hist">'+(hist.length?hist.map(function(x){return '<div><span>'+fmtDate(x.at)+' · '+esc(x.reason)+'</span><b style="color:'+(x.amount>0?'var(--ok)':'var(--coral)')+'">'+(x.amount>0?'+':'')+x.amount+'</b></div>';}).join(''):'<span class="muted">Операций пока не было</span>')+'</div>':'')+
+      '</div>';
+  }).join('')+'</div>';
+  el.innerHTML=h;
+  if(focus){ var q=$('cq'); q.focus(); q.setSelectionRange(q.value.length,q.value.length); }
+}
+document.addEventListener('input',function(e){ if(e.target.id==='cq'){ cq=e.target.value.trim().toLowerCase(); renderCustomers(); } });
 
 /* ---------- фото ---------- */
 var photoTarget=null;
@@ -490,12 +651,13 @@ $('file').addEventListener('change',function(){
   Promise.all([resize(file,1200,.85),resize(file,360,.8)]).then(function(r){ return api('upload',{full:r[0],thumb:r[1]}); })
     .then(function(j){
       if(photoTarget==='product' && F){ F.image=j.image; drawProduct(); toast('Фото загружено — не забудьте сохранить'); }
+      if(photoTarget==='promo' && PF){ PF.image=j.image; drawPromo(); toast('Картинка загружена — не забудьте сохранить'); }
     }).catch(fail);
 });
 
 /* ---------- клики ---------- */
 document.addEventListener('click',function(e){
-  var t=e.target.closest('button,[data-edit],[data-close]'); if(!t) return; var d=t.dataset;
+  var t=e.target.closest('button,[data-edit],[data-pedit],[data-close]'); if(!t) return; var d=t.dataset;
   if(d.close!==undefined) return closeModal();
   if(d.new!==undefined) return openProduct(0);
   if(d.edit) return openProduct(d.edit);
@@ -503,6 +665,23 @@ document.addEventListener('click',function(e){
   if(d.move) return api('product/move',{id:+d.move,dir:+d.dir}).then(renderProducts).catch(fail);
   if(d.photo){ photoTarget=d.photo; return $('file').click(); }
   if(d.nophoto!==undefined){ F.image=''; return drawProduct(); }
+  if(d.pnew!==undefined) return openPromo('');
+  if(d.pedit) return openPromo(d.pedit);
+  if(d.pnophoto!==undefined){ PF.image=''; return drawPromo(); }
+  if(d.pcolor){ PF.color=d.pcolor; return drawPromo(); }
+  if(d.pmove) return api('promo/move',{id:d.pmove,dir:+d.dir}).then(renderPromos).catch(fail);
+  if(d.pdel!==undefined){
+    if(!PF._sure){ PF._sure=true; drawPromo(); setTimeout(function(){ if(PF){PF._sure=false; drawPromo();} },4000); return; }
+    return api('promo/delete',{id:PF.id}).then(function(){ closeModal(); toast('Акция удалена'); renderPromos(); }).catch(fail);
+  }
+  if(d.creload!==undefined) return loadCustomers();
+  if(d.chist){ if(openHist[d.chist]){ delete openHist[d.chist]; return renderCustomers(); } return api('customer?key='+encodeURIComponent(d.chist)).then(function(j){ openHist[d.chist]=j.history; renderCustomers(); }).catch(fail); }
+  if(d.cbonus){
+    var amt=document.querySelector('[data-camt="'+d.cbonus+'"]').value, rsn=document.querySelector('[data-crsn="'+d.cbonus+'"]').value;
+    if(!(+amt)) return toast('Введите количество, например 200 или -200',true);
+    t.disabled=true;
+    return api('customer/bonus',{key:d.cbonus,amount:+amt,reason:rsn}).then(function(j){ CUS=j.customers; delete openHist[d.cbonus]; toast('Готово, на счёте '+j.balance+' — покупатель уведомлён'); renderCustomers(); }).catch(function(x){ t.disabled=false; fail(x); });
+  }
   if(d.del!==undefined){
     if(!F._sure){ F._sure=true; drawProduct(); setTimeout(function(){ if(F){F._sure=false; drawProduct();} },4000); return; }
     return api('product/delete',{id:F.id}).then(function(){ closeModal(); toast('Товар удалён'); renderProducts(); }).catch(fail);

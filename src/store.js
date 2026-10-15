@@ -12,7 +12,15 @@ async function getUser(platform, userId) {
   return u;
 }
 async function saveUser(u) {
+  // Новых покупателей добавляем в общий список — для вкладки «Покупатели» в админке
+  if (!u.indexed) { u.indexed = 1; await db.lpush('users', `${u.platform}:${u.userId}`); }
   await db.set(`user:${u.platform}:${u.userId}`, u);
+}
+async function listUsers(limit = 500) {
+  const keys = [...new Set(await db.lrange('users', 0, limit - 1))];
+  const users = await db.mget(keys.map(k => `user:${k}`));
+  const loyal = await db.mget(keys.map(k => `loyal:${k}`));
+  return users.map((u, i) => (u ? { u, l: loyal[i] || {} } : null)).filter(Boolean);
 }
 
 async function newOrder(data) {
@@ -73,4 +81,4 @@ async function newQuestion(data) {
 const question = id => db.get(`q:${id}`);
 const saveQuestion = q => db.set(`q:${q.id}`, q);
 
-module.exports = { getUser, saveUser, newOrder, order, setOrder, listOrders, ordersByIds, managers, addManager, removeManager, isManager, newQuestion, question, saveQuestion, flush: db.flush };
+module.exports = { getUser, saveUser, listUsers, newOrder, order, setOrder, listOrders, ordersByIds, managers, addManager, removeManager, isManager, newQuestion, question, saveQuestion, flush: db.flush };

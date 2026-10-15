@@ -11,6 +11,7 @@ const hub = require('./hub');
 const admin = require('./admin');
 const media = require('./media');
 const db = require('./db');
+const loyalty = require('./loyalty');
 const P = require('./shared/pricing');
 const { validate } = require('./initdata');
 const { json, readBody, clientIp, limiter } = require('./web');
@@ -36,7 +37,7 @@ function auth(body) {
   const token = platform === 'tg' ? config.telegram.token : config.max.token;
   const data = validate(body.initData, token);
   if (!data || !data.user || !data.user.id) return null;
-  return { platform, user: { id: String(data.user.id), name: [data.user.first_name, data.user.last_name].filter(Boolean).join(' '), username: data.user.username || '' }, verified: true };
+  return { platform, user: { id: String(data.user.id), name: [data.user.first_name, data.user.last_name].filter(Boolean).join(' '), username: data.user.username || '' }, verified: true, startParam: data.startParam || '' };
 }
 
 // Не больше 15 заказов в час с одного IP
@@ -49,6 +50,8 @@ function publicCatalog() {
     cats: c.cats.filter(x => x.count > 0).map(({ cid, name, emoji, image, count }) => ({ cid, name, emoji, image, count })),
     products: c.products.filter(p => !p.out).map(p => ({ id: p.id, cid: p.cid, name: p.name, fullName: catalog.fullName(p), note: p.note, price: p.price, unit: p.unit, piece_g: p.piece_g, min_g: p.min_g, sale_price: p.sale_price, sale_from: p.sale_from, sale_to: p.sale_to, image: p.image, thumb: p.thumb })),
     settings: { brand: s.brand, phone_tel: s.phone_tel, phone_wa: s.phone_wa, hours: s.hours, delivery: s.delivery, payment: s.payment, price_date: s.price_date, min_order: +s.min_order || 0 },
+    promos: catalog.livePromos().map(x => ({ id: x.id, title: x.title, text: x.text, badge: x.badge, image: x.image, btn: x.btn, link_type: x.link_type, link_id: x.link_id, color: x.color, to: x.to, popup: x.popup })),
+    bonus: loyalty.cfg(),
     timeSlots: config.timeSlots,
     payments: config.payments,
   };
@@ -118,7 +121,10 @@ async function route(req, res) {
   }
 
   // --- API мини-приложения ---
-  if (req.method === 'GET' && p === '/api/catalog') return json(res, 200, publicCatalog());
+  if (req.method === 'GET' && p === '/api/catalog') {
+    const tg = hub.adapters.tg ? await loyalty.botName('tg') : '';
+    return json(res, 200, { ...publicCatalog(), bots: { tg: tg ? `https://t.me/${tg}` : '' } });
+  }
 
   if (req.method === 'POST' && p === '/api/session') {
     const body = await readBody(req).catch(() => ({}));
@@ -127,8 +133,20 @@ async function route(req, res) {
     if (who.platform === 'web') return json(res, 200, { ok: true, platform: 'web', cart: {}, profile: {} });
     const u = await store.getUser(who.platform, who.user.id);
     u.name = u.name || who.user.name; u.username = who.user.username;
+    // Открыли приложение по ссылке друга (startapp=ref_КОД)
+    let gift = null;
+    if (/^ref_[A-Za-z0-9]{4,12}$/.test(who.startParam)) gift = await loyalty.applyReferral(who.platform, who.user.id, who.startParam, { hasOrders: u.orderIds.length > 0 });
     await store.saveUser(u);
-    return json(res, 200, { ok: true, platform: who.platform, user: who.user, cart: cleanCart(u.cart), profile: { name: u.profile.name || who.user.name, phone: u.profile.phone || '', address: u.profile.address || '' } });
+    const account = await loyalty.account(who.platform, who.user.id, u);
+    return json(res, 200, { ok: true, platform: who.platform, user: who.user, cart: cleanCart(u.cart), profile: { name: u.profile.name || who.user.name, phone: u.profile.phone || '', address: u.profile.address || '' }, account, gift });
+  }
+
+  if (req.method === 'POST' && p === '/api/account') {
+    const body = await readBody(req).catch(() => ({}));
+    const who = auth(body);
+    if (!who || who.platform === 'web') return json(res, 401, { ok: false });
+    const u = await store.getUser(who.platform, who.user.id);
+    return json(res, 200, { ok: true, account: await loyalty.account(who.platform, who.user.id, u) });
   }
 
   if (req.method === 'PUT' && p === '/api/cart') {
@@ -155,12 +173,13 @@ async function route(req, res) {
       user: u, platform: who.platform, userId: who.user?.id, chatId: u?.chatId, username: who.user?.username,
       source: who.platform === 'web' ? 'web' : 'app', verified: who.verified,
       cart: cleanCart(body.cart), name: f.name, phone: f.phone, address: f.address, time: f.time, pay: f.pay, comment: f.comment,
+      useBonus: !!f.useBonus,
     });
     if (u) await store.saveUser(u);
     if (!r.ok) return json(res, 422, r);
     // Дублируем подтверждение в чат с ботом — там же покупатель увидит статусы
     if (who.platform !== 'web') await hub.send(who.platform, u?.chatId ? { chatId: u.chatId } : { userId: who.user.id }, { text: orders.customerText(r.order), buttons: [[{ text: '📦 Мои заказы', cb: 'my' }]] });
-    return json(res, 200, { ok: true, id: r.order.id, sum: r.order.sum });
+    return json(res, 200, { ok: true, id: r.order.id, sum: r.order.sum, bonusUsed: r.order.bonusUsed || 0, toPay: r.order.toPay });
   }
 
   json(res, 404, { ok: false });

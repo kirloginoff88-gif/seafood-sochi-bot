@@ -115,6 +115,7 @@ async function setup() {
     { command: 'menu', description: 'Главное меню' },
     { command: 'catalog', description: 'Каталог' },
     { command: 'cart', description: 'Корзина' },
+    { command: 'account', description: 'Кабинет и бонусы' },
   ] }).catch(e => console.warn('[tg] commands:', e.message));
   if (config.publicUrl) {
     await api('setChatMenuButton', { menu_button: { type: 'web_app', text: 'Магазин', web_app: { url: config.appUrl('tg') } } })
@@ -135,6 +136,7 @@ async function connect() {
 async function status(me) {
   if (!config.telegram.token) return { enabled: false };
   me = me || (await api('getMe'));
+  if (me.username) await require('../db').set('bot:tg:username', me.username).catch(() => {}); // для реферальных ссылок
   const info = await api('getWebhookInfo');
   const expected = `${config.publicUrl}/webhook/tg`;
   return {

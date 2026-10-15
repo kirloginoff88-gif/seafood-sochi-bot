@@ -47,6 +47,12 @@ function validate(input) {
 async function create(input) {
   const v = validate(input);
   if (v.errors.length) return { ok: false, errors: v.errors };
+  // Оплата бонусами: только покупателю из мессенджера и не больше разрешённой доли
+  const loyalty = require('./loyalty');
+  let bonusUsed = 0;
+  if (input.useBonus && input.platform !== 'web' && input.userId) {
+    bonusUsed = loyalty.maxSpend(await loyalty.get(input.platform, String(input.userId)), v.sum.sum);
+  }
   const o = await store.newOrder({
     platform: input.platform,
     userId: input.userId ? String(input.userId) : null,
@@ -60,9 +66,12 @@ async function create(input) {
     comment: String(input.comment || '').trim().slice(0, 500),
     lines: v.sum.lines,
     sum: v.sum.sum,
+    bonusUsed,
+    toPay: v.sum.sum - bonusUsed,
     weighed: v.sum.weighed,
     managerMsgs: [],
   });
+  if (bonusUsed) await loyalty.spend(input.platform, String(input.userId), bonusUsed, o.id);
   // Запоминаем данные для следующего заказа и чистим корзину.
   // Если вызывающий уже держит объект покупателя (input.user) — меняем его, сохранит вызывающий.
   if (input.platform !== 'web' && input.userId) {
@@ -82,8 +91,10 @@ async function create(input) {
   return { ok: true, order: o };
 }
 
+const bonusLine = o => (o.bonusUsed ? `\n💎 Бонусами: −${P.rub(o.bonusUsed)}\n<b>К оплате: ${P.rub(Math.max(0, (o.finalSum || o.sum) - o.bonusUsed))}</b>` : '');
+
 function customerText(o) {
-  return `✅ <b>Заказ №${o.id} принят!</b>\n\n${linesText(o.lines)}\n\n<b>Примерно: ${P.rub(o.sum)}</b>${o.weighed ? '\n<i>Весовой товар взвесим при сборке — итог подтвердит менеджер.</i>' : ''}\n\n📍 ${esc(o.address)}\n🕒 ${esc(o.time)}\n💳 ${esc(o.pay)}\n\nМенеджер свяжется с вами в течение 15 минут. Статус заказа придёт в этот чат.`;
+  return `✅ <b>Заказ №${o.id} принят!</b>\n\n${linesText(o.lines)}\n\n<b>Примерно: ${P.rub(o.sum)}</b>${bonusLine(o)}${o.weighed ? '\n<i>Весовой товар взвесим при сборке — итог подтвердит менеджер.</i>' : ''}\n\n📍 ${esc(o.address)}\n🕒 ${esc(o.time)}\n💳 ${esc(o.pay)}\n\nМенеджер свяжется с вами в течение 15 минут. Статус заказа придёт в этот чат.`;
 }
 
 function managerView(o) {
@@ -103,7 +114,7 @@ function managerView(o) {
     '',
     linesText(o.lines),
     '',
-    `<b>Примерно: ${P.rub(o.sum)}</b>${o.finalSum ? `\n<b>Итог по весу: ${P.rub(o.finalSum)}</b>` : ''}`,
+    `<b>Примерно: ${P.rub(o.sum)}</b>${o.finalSum ? `\n<b>Итог по весу: ${P.rub(o.finalSum)}</b>` : ''}${bonusLine(o)}`,
     o.crm ? `CRM: ${o.crm.entity === 'deal' ? 'сделка' : 'лид'} #${o.crm.id}` : '',
   ].filter((x, i, a) => x !== '' || a[i - 1] !== '').join('\n');
   const buttons = [];
@@ -157,13 +168,16 @@ async function setStatus(id, status, by) {
   };
   const btn = status === 'done' ? [[{ text: '🔁 Повторить заказ', cb: `rp:${o.id}` }]] : [[{ text: '📞 Связаться с менеджером', cb: 'ct' }]];
   await notifyCustomer(o, msgs[status], btn);
-  return o;
+  // Кешбэк, награда пригласившему, возврат бонусов при отмене
+  try { await require('./loyalty').onStatus(o, status); } catch (e) { console.error('[loyalty]', e); }
+  return (await store.order(o.id)) || o;
 }
 
 async function setFinalSum(id, sum, by) {
-  const o = await store.setOrder(id, { finalSum: sum, by });
-  if (!o) return null;
-  await notifyCustomer(o, `⚖️ Взвесили ваш заказ №${o.id}: итог <b>${P.rub(sum)}</b>.\nДоставка: ${esc(o.time)}.`, [[{ text: '👍 Всё верно', cb: 'thx' }, { text: '📞 Менеджер', cb: 'ct' }]]);
+  const cur = await store.order(id);
+  if (!cur) return null;
+  const o = await store.setOrder(id, { finalSum: sum, toPay: Math.max(0, sum - (cur.bonusUsed || 0)), by });
+  await notifyCustomer(o, `⚖️ Взвесили ваш заказ №${o.id}: итог <b>${P.rub(sum)}</b>.${o.bonusUsed ? `\nСписано бонусами: −${P.rub(o.bonusUsed)}, к оплате <b>${P.rub(o.toPay)}</b>.` : ''}\nДоставка: ${esc(o.time)}.`, [[{ text: '👍 Всё верно', cb: 'thx' }, { text: '📞 Менеджер', cb: 'ct' }]]);
   return o;
 }
 

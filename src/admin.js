@@ -8,6 +8,7 @@ const media = require('./media');
 const { json, readBody, clientIp, limiter } = require('./web');
 const hub = require('./hub');
 const db = require('./db');
+const loyalty = require('./loyalty');
 
 const COOKIE = 'sf_admin';
 const TTL = 30 * 24 * 3600 * 1000;
@@ -44,7 +45,19 @@ function adminState() {
     cats: c.cats.map(({ cid, name, emoji, image, count, total, sort }) => ({ cid, name, emoji, image, count, total, sort })),
     products: c.products.map(({ thumb, imageAbs, ...p }) => ({ ...p, thumb })),
     settings: c.settings,
+    promos: c.promos.map(({ imageAbs, ...x }) => x),
   };
+}
+
+// Покупатели из мессенджеров: заказы, бонусы, приглашения
+async function customerList() {
+  const rows = await store.listUsers(1000);
+  return rows.map(({ u, l }) => ({
+    key: `${u.platform}:${u.userId}`, platform: u.platform, userId: u.userId,
+    name: u.profile.name || u.name || '', username: u.username || '', phone: u.profile.phone || '',
+    orders: (u.orderIds || []).length, lastOrder: (u.orderIds || [])[0] || null, createdAt: u.createdAt || null,
+    balance: l.balance || 0, refCount: l.refCount || 0, referred: !!l.referredBy, refCode: l.refCode || '',
+  }));
 }
 
 async function orderList(filter) {
@@ -54,7 +67,7 @@ async function orderList(filter) {
     id: o.id, status: o.status, createdAt: o.createdAt, platform: o.platform, source: o.source, verified: o.verified,
     customer: o.customer, address: o.address, time: o.time, pay: o.pay, comment: o.comment,
     lines: o.lines.map(l => ({ name: l.name, qtyLabel: l.qtyLabel, sum: l.sum, approx: l.approx, ask: l.ask })),
-    sum: o.sum, finalSum: o.finalSum || null,
+    sum: o.sum, finalSum: o.finalSum || null, bonusUsed: o.bonusUsed || 0, bonusEarned: o.bonusEarned || 0,
   }));
 }
 
@@ -93,6 +106,13 @@ async function handle(req, res, url) {
   try {
     if (req.method === 'GET' && action === 'state') return json(res, 200, { ok: true, ...adminState() }), true;
     if (req.method === 'GET' && action === 'orders') return json(res, 200, { ok: true, orders: await orderList(url.searchParams.get('filter')), statuses: orders.STATUS }), true;
+    if (req.method === 'GET' && action === 'customers') return json(res, 200, { ok: true, customers: await customerList() }), true;
+    if (req.method === 'GET' && action === 'customer') {
+      const [pl, id] = String(url.searchParams.get('key') || '').split(':');
+      if (!['tg', 'max'].includes(pl) || !id) return json(res, 400, { ok: false, error: 'Неизвестный покупатель' }), true;
+      const d = await loyalty.get(pl, id);
+      return json(res, 200, { ok: true, history: d.history }), true;
+    }
     if (req.method === 'GET' && action === 'bots') return json(res, 200, { ok: true, ...(await botsStatus()) }), true;
     if (req.method !== 'POST') return json(res, 405, { ok: false }), true;
 
@@ -107,6 +127,19 @@ async function handle(req, res, url) {
       case 'category/save': await catalog.saveCategory(body.category || {}); return json(res, 200, { ok: true, ...adminState() }), true;
       case 'category/delete': await catalog.deleteCategory(body.cid); return json(res, 200, { ok: true, ...adminState() }), true;
       case 'category/move': await catalog.moveCategory(body.cid, body.dir); return json(res, 200, { ok: true, ...adminState() }), true;
+      case 'promo/save': { const promo = await catalog.savePromo(body.promo || {}); return json(res, 200, { ok: true, promo, ...adminState() }), true; }
+      case 'promo/delete': await catalog.deletePromo(body.id); return json(res, 200, { ok: true, ...adminState() }), true;
+      case 'promo/move': await catalog.movePromo(body.id, body.dir); return json(res, 200, { ok: true, ...adminState() }), true;
+      case 'customer/bonus': {
+        const [pl, id] = String(body.key || '').split(':');
+        const amount = Math.round(+body.amount || 0);
+        if (!['tg', 'max'].includes(pl) || !id || !(await db.get(`user:${pl}:${id}`))) return json(res, 404, { ok: false, error: 'Покупатель не найден' }), true;
+        if (!amount || Math.abs(amount) > 1_000_000) return json(res, 400, { ok: false, error: 'Введите количество бонусов, например 200 или -200' }), true;
+        const reason = String(body.reason || '').trim().slice(0, 120) || (amount > 0 ? 'Начислено магазином' : 'Списано магазином');
+        const d = await loyalty.credit(pl, id, amount, reason);
+        if (body.notify !== false) await hub.send(pl, { userId: id }, { text: amount > 0 ? `🎁 Вам начислено <b>${amount} бонусов</b>: ${orders.esc(reason)}.\nНа счёте: <b>${d.balance}</b>.` : `💎 Списано ${-amount} бонусов: ${orders.esc(reason)}. На счёте: <b>${d.balance}</b>.` });
+        return json(res, 200, { ok: true, balance: d.balance, customers: await customerList() }), true;
+      }
       case 'settings/save': await catalog.saveSettings(body.settings || {}); return json(res, 200, { ok: true, ...adminState() }), true;
       case 'upload': {
         const full = media.fromDataUrl(body.full);

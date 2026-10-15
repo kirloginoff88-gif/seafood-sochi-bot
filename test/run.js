@@ -522,3 +522,129 @@ test.after(() => {
   if (REDIS) { redisSrv.close(); console.log(`# запросов к Redis: ${redisCalls}`); }
   fs.rmSync(tmp, { recursive: true, force: true });
 });
+
+test('бонусы и приглашения: подарок другу, оплата бонусами, кешбэк, награда, возврат при отмене', async () => {
+  const orders = require('../src/orders');
+  const loyalty = require('../src/loyalty');
+  await db.set('bot:tg:username', 'seafood_test_bot');
+
+  // владелец ссылки открывает кабинет
+  let c = await say('tg', 2001, 2001, { type: 'start', payload: '' });
+  assert.ok(flat(last(c)).some(b => b.cb === 'acc'), 'в меню есть кабинет');
+  c = await say('tg', 2001, 2001, { type: 'callback', data: 'acc' });
+  const code = await loyalty.refCode('tg', '2001');
+  assert.match(code, /^[A-Z2-9]{6}$/);
+  assert.match(last(c).text, new RegExp(`t\\.me/seafood_test_bot\\?start=ref_${code}`));
+  assert.ok(flat(last(c)).some(b => b.url && b.url.startsWith('https://t.me/share/url')), 'кнопка «Пригласить друга»');
+
+  // друг приходит по ссылке
+  outbox.length = 0;
+  c = await say('tg', 2002, 2002, { type: 'start', payload: `ref_${code}` });
+  assert.match(c.replies[0].text, /дарим <b>300 бонусов/);
+  assert.equal((await loyalty.get('tg', '2002')).balance, 300);
+  assert.ok(outbox.some(m => m.target.userId === '2001' && /По вашей ссылке пришёл друг/.test(m.view.text)), 'пригласивший уведомлён');
+  assert.equal(await loyalty.applyReferral('tg', '2002', code), null, 'повторно подарок не даём');
+  assert.equal(await loyalty.applyReferral('tg', '2001', code), null, 'сам себя пригласить нельзя');
+  assert.equal((await loyalty.get('tg', '2001')).refCount, 1);
+
+  // оформление в чате: переключатель «списать бонусы»
+  await patchUser('tg', '2002', { cart: { 41: 1, 76: 1 }, step: 'confirm', draft: { name: 'Олег', phone: '+79180000001', address: 'Навагинская, 1', time: 'Как можно скорее', pay: 'Наличными' } });
+  c = await say('tg', 2002, 2002, { type: 'callback', data: 'bu' });
+  assert.match(last(c).text, /Бонусами: −300 ₽/);
+  assert.match(last(c).text, /К оплате: 8 050 ₽/);
+  c = await say('tg', 2002, 2002, { type: 'callback', data: 'ok' });
+  const id = +last(c).text.match(/№(\d+)/)[1];
+  let o = await store.order(id);
+  assert.equal(o.bonusUsed, 300); assert.equal(o.toPay, 8050);
+  assert.equal((await loyalty.get('tg', '2002')).balance, 0, 'бонусы списаны');
+
+  // доставлен → кешбэк 5% с оплаченного и награда пригласившему, повтор не удваивает
+  outbox.length = 0;
+  await orders.setStatus(id, 'done', 'тест');
+  await orders.setStatus(id, 'done', 'тест');
+  assert.equal((await loyalty.get('tg', '2002')).balance, Math.floor(8050 * 0.05));
+  assert.equal((await loyalty.get('tg', '2001')).balance, 500);
+  assert.ok(outbox.some(m => m.target.userId === '2001' && /начислили <b>500 бонусов/.test(m.view.text)));
+  assert.equal((await store.order(id)).bonusEarned, 402);
+
+  // второй заказ с бонусами отменён — бонусы вернулись
+  const r = await orders.create({ platform: 'tg', userId: '2002', chatId: '2002', cart: { 41: 1 }, name: 'Олег', phone: '+79180000001', address: 'Навагинская, 1', useBonus: true });
+  assert.ok(r.ok);
+  assert.equal(r.order.bonusUsed, Math.min(402, Math.floor(2850 * 0.3)));
+  assert.equal((await loyalty.get('tg', '2002')).balance, 402 - r.order.bonusUsed);
+  await orders.setStatus(r.order.id, 'canceled', 'тест');
+  await orders.setStatus(r.order.id, 'canceled', 'тест');
+  assert.equal((await loyalty.get('tg', '2002')).balance, 402, 'возврат ровно один раз');
+  assert.equal((await loyalty.get('tg', '2001')).balance, 500, 'награда за друга — только один раз');
+
+  // мини-приложение: друг из MAX по ссылке startapp, кабинет в сессии
+  const { srv, req } = await startServer({ vercel: true });
+  try {
+    const initData = sign({ auth_date: String(Math.floor(Date.now() / 1000)), start_param: `ref_${code}`, user: JSON.stringify({ id: 3003, first_name: 'Вера' }) }, 'max-test-token');
+    const ses = await req('POST', '/api/session', { platform: 'max', initData });
+    assert.equal(ses.body.gift.welcome, 300, 'подарок по ссылке из приложения');
+    assert.equal(ses.body.account.bonus.balance, 300);
+    assert.equal(ses.body.account.bonus.maxPay, 30);
+    assert.match(ses.body.account.ref.link, /^https:\/\/max\.ru\/seafood_sochi_bot\?start=ref_/);
+    const again = await req('POST', '/api/session', { platform: 'max', initData });
+    assert.equal(again.body.gift, null);
+    const ord = await req('POST', '/api/order', { platform: 'max', initData, cart: { 41: 1 }, order: { name: 'Вера', phone: '+79180000003', address: 'Курортный пр., 1', useBonus: true } });
+    assert.equal(ord.body.bonusUsed, 300); assert.equal(ord.body.toPay, 2550);
+    const acc = await req('POST', '/api/account', { platform: 'max', initData });
+    assert.equal(acc.body.account.bonus.balance, 0);
+    assert.equal(acc.body.account.orders[0].id, ord.body.id);
+    assert.equal(acc.body.account.history[0].amount, -300);
+    assert.equal((await req('POST', '/api/account', { platform: 'web' })).status, 401);
+  } finally { srv.close(); }
+});
+
+test('акции: стартовые баннеры, даты показа, админка, покупатели и ручные бонусы', async () => {
+  const server = require('../src/server');
+  assert.ok(server.publicCatalog().promos.length >= 3, 'стартовые акции видны в магазине');
+  const { srv, req } = await startServer({ vercel: REDIS });
+  try {
+    assert.equal((await req('POST', '/admin/api/promo/save', { promo: { title: 'x' } })).status, 401);
+    assert.equal((await req('POST', '/admin/api/login', { password: 'secret-pass' })).status, 200);
+    // новая акция с картинкой, ведёт на товар, всплывает
+    const up = await req('POST', '/admin/api/upload', { full: dataUrl(JPEG), thumb: dataUrl(JPEG) });
+    let r = await req('POST', '/admin/api/promo/save', { promo: { title: 'Креветки −15%', text: 'До воскресенья', badge: '−15%', image: up.body.image, link_type: 'product', link_id: '41', popup: 1 } });
+    assert.equal(r.status, 200);
+    const id = r.body.promo.id;
+    assert.equal(r.body.promos[0].id, id, 'новая акция — первой');
+    let pub = server.publicCatalog().promos;
+    assert.equal(pub[0].title, 'Креветки −15%'); assert.equal(pub[0].popup, 1);
+    assert.equal((await req('POST', '/admin/api/promo/save', { promo: { title: 'Плохо', link_type: 'product', link_id: '99999' } })).status, 422);
+    assert.equal((await req('POST', '/admin/api/promo/save', { promo: { title: 'Плохо', from: '2026-10-10', to: '2026-10-01' } })).status, 422);
+    // будущая и выключенная не показываются
+    await req('POST', '/admin/api/promo/save', { promo: { title: 'Будущая', from: '2099-01-01' } });
+    r = await req('POST', '/admin/api/promo/save', { promo: { ...r.body.promo, active: 0 } });
+    pub = server.publicCatalog().promos.map(x => x.title);
+    assert.ok(!pub.includes('Будущая') && !pub.includes('Креветки −15%'));
+    r = await req('POST', '/admin/api/promo/move', { id, dir: 1 });
+    assert.equal(r.body.promos[2].id, id, 'сдвинули ниже на одну позицию (выше — «Будущая»)');
+    r = await req('POST', '/admin/api/promo/delete', { id });
+    assert.ok(!r.body.promos.some(x => x.id === id));
+    assert.equal(await media.read(up.body.image), null, 'картинка удалённой акции удалена');
+    // бот показывает акции
+    const c = await say('tg', 2001, 2001, { type: 'callback', data: 'sale' });
+    assert.match(last(c).text, /Приведи друга/);
+    assert.ok(flat(last(c)).some(b => b.cb === 'acc'));
+
+    // настройки бонусов
+    r = await req('POST', '/admin/api/settings/save', { settings: { bonus_cashback: '7', bonus_max_pay: '150' } });
+    assert.equal(r.body.settings.bonus_cashback, '7'); assert.equal(r.body.settings.bonus_max_pay, '100');
+    await req('POST', '/admin/api/settings/save', { settings: { bonus_cashback: '5', bonus_max_pay: '30' } });
+
+    // покупатели и ручное начисление
+    r = await req('GET', '/admin/api/customers');
+    const owner = r.body.customers.find(x => x.key === 'tg:2001');
+    assert.equal(owner.balance, 500); assert.equal(owner.refCount, 2, 'друг из Telegram и подруга из MAX');
+    outbox.length = 0;
+    r = await req('POST', '/admin/api/customer/bonus', { key: 'tg:2001', amount: 250, reason: 'Извинение за задержку' });
+    assert.equal(r.body.balance, 750);
+    assert.ok(outbox.some(m => m.target.userId === '2001' && /Извинение за задержку/.test(m.view.text)));
+    assert.equal((await req('POST', '/admin/api/customer/bonus', { key: 'tg:nobody', amount: 5 })).status, 404);
+    r = await req('GET', '/admin/api/customer?key=tg:2001');
+    assert.equal(r.body.history[0].amount, 250);
+  } finally { srv.close(); }
+});

@@ -11,6 +11,7 @@ const catalog = require('./catalog');
 const store = require('./store');
 const orders = require('./orders');
 const config = require('./config');
+const loyalty = require('./loyalty');
 const { esc } = orders;
 
 const PAGE = 10;
@@ -24,7 +25,7 @@ function cartBtnLabel(u) {
 
 function menuView(u, greet) {
   const s = catalog.get().settings;
-  const hasSales = catalog.sales().length > 0;
+  const hasSales = catalog.sales().length > 0 || catalog.livePromos().length > 0;
   const text = greet
     ? `Здравствуйте${u.profile.name ? ', ' + esc(u.profile.name) : ''}! Это <b>${esc(s.brand || 'Seafood Сочи')}</b> 🐟\n\nСвежая и замороженная рыба, икра, креветки, крабы и копчёности с доставкой по Сочи. ${esc(s.hours || '')}.\n\nОткройте магазин с фото и корзиной или выберите раздел прямо здесь. Можно просто написать, что ищете: «креветки», «икра».`
     : 'Главное меню. Что вас интересует?';
@@ -32,8 +33,8 @@ function menuView(u, greet) {
   if (config.publicUrl) rows.push([{ text: '🛍 Открыть магазин', app: true }]);
   rows.push(hasSales ? [{ text: '🐟 Каталог', cb: 'cats' }, { text: '🔥 Акции', cb: 'sale' }] : [{ text: '🐟 Каталог', cb: 'cats' }, { text: '🔎 Поиск', cb: 'srch' }]);
   rows.push(hasSales ? [{ text: cartBtnLabel(u), cb: 'cart' }, { text: '🔎 Поиск', cb: 'srch' }] : [{ text: cartBtnLabel(u), cb: 'cart' }]);
-  rows.push([{ text: '🚚 Доставка и оплата', cb: 'dl' }, { text: '📞 Менеджер', cb: 'ct' }]);
-  if ((u.orderIds || []).length) rows.push([{ text: '📦 Мои заказы', cb: 'my' }]);
+  rows.push([{ text: '👤 Кабинет и бонусы', cb: 'acc' }, { text: '📞 Менеджер', cb: 'ct' }]);
+  rows.push((u.orderIds || []).length ? [{ text: '🚚 Доставка и оплата', cb: 'dl' }, { text: '📦 Мои заказы', cb: 'my' }] : [{ text: '🚚 Доставка и оплата', cb: 'dl' }]);
   return { text, buttons: rows };
 }
 
@@ -74,11 +75,57 @@ function catView(u, cid, page) {
 
 function saleView(u) {
   const items = catalog.sales();
-  if (!items.length) return { text: 'Сейчас акций нет — загляните в каталог 🐟', buttons: [[{ text: '🐟 Каталог', cb: 'cats' }]] };
+  const promos = catalog.livePromos();
+  if (!items.length && !promos.length) return { text: 'Сейчас акций нет — загляните в каталог 🐟', buttons: [[{ text: '🐟 Каталог', cb: 'cats' }]] };
+  const parts = ['<b>🔥 Акции и предложения</b>'];
+  for (const x of promos.slice(0, 6)) parts.push(`\n${x.badge ? `[${esc(x.badge)}] ` : ''}<b>${esc(x.title)}</b>${x.to ? ` <i>до ${x.to.slice(8, 10)}.${x.to.slice(5, 7)}</i>` : ''}\n${esc(x.text)}`);
+  if (items.length) parts.push(`\n<b>Скидки на товары:</b>\n${items.map(p => `• ${esc(catalog.fullName(p))}: <b>${P.priceText(p)}</b> вместо ${P.rub(p.price)} (−${P.saleOff(p)}%)`).join('\n')}`);
+  const promoBtns = promos.slice(0, 6).map(promoBtn).filter(Boolean);
+  const withImage = promos.find(x => x.imageAbs);
   return {
-    text: `<b>🔥 Акции</b>\n${items.map(p => `• ${esc(catalog.fullName(p))}: <b>${P.priceText(p)}</b> вместо ${P.rub(p.price)} (−${P.saleOff(p)}%)`).join('\n')}`,
-    buttons: [...items.slice(0, 20).map(productBtn), [{ text: '← Меню', cb: 'm' }, { text: cartBtnLabel(u), cb: 'cart' }]],
+    text: parts.join('\n'),
+    image: withImage ? withImage.imageAbs : undefined,
+    buttons: [...promoBtns, ...items.slice(0, 20).map(productBtn), [{ text: '← Меню', cb: 'm' }, { text: cartBtnLabel(u), cb: 'cart' }]],
   };
+}
+// Кнопка у акции: товар, раздел, кабинет или ссылка
+function promoBtn(x) {
+  const t = x.btn || x.title;
+  if (x.link_type === 'product') return [{ text: '👉 ' + t, cb: `p:${x.link_id}` }];
+  if (x.link_type === 'category') return [{ text: '👉 ' + t, cb: `c:${x.link_id}:0` }];
+  if (x.link_type === 'account') return [{ text: '👉 ' + t, cb: 'acc' }];
+  if (x.link_type === 'url') return [{ text: '👉 ' + t, url: x.link_id }];
+  return null;
+}
+
+// Личный кабинет: бонусы, приглашения, заказы
+async function accountView(u) {
+  const a = await loyalty.account(u.platform, u.userId, u);
+  const b = a.bonus;
+  const lines = ['<b>👤 Личный кабинет</b>', ''];
+  if (b.enabled) {
+    lines.push(`💎 Бонусов на счёте: <b>${a.bonus.balance}</b>`, `<i>1 бонус = 1 ₽. Оплачивайте ими до ${b.maxPay}% заказа.</i>`, '');
+    lines.push('<b>Как получить бонусы</b>');
+    if (b.cashback) lines.push(`• ${b.cashback}% с каждого доставленного заказа`);
+    if (b.referrer || b.welcome) lines.push(`• Пригласите друга: ему ${b.welcome} бонусов на первый заказ, вам ${b.referrer} — когда он получит покупку`);
+    lines.push('');
+    if (a.ref.link) lines.push(`🔗 Ваша ссылка для друзей:\n${a.ref.link}`);
+    else lines.push(`🔑 Ваш код приглашения: <b>${a.ref.code}</b>`);
+    lines.push(`👥 Приглашено друзей: <b>${a.ref.count}</b>`);
+  }
+  const last = a.orders[0];
+  if (last) lines.push('', `📦 Последний заказ №${last.id}: ${last.statusLabel}, ${P.rub(last.finalSum || last.sum)}`);
+  if (a.history.length) lines.push('', '<b>Последние операции</b>', ...a.history.slice(0, 5).map(h => `${h.amount > 0 ? '＋' : '−'}${Math.abs(h.amount)} · ${esc(h.reason)}`));
+  const rows = [];
+  if (b.enabled && a.ref.link) {
+    const share = u.platform === 'tg'
+      ? `https://t.me/share/url?url=${encodeURIComponent(a.ref.link)}&text=${encodeURIComponent(`Заказываю морепродукты в ${catalog.get().settings.brand || 'Seafood Сочи'} — держи ${b.welcome} бонусов на первый заказ 🐟`)}`
+      : a.ref.link;
+    rows.push([{ text: '📤 Пригласить друга', url: share }]);
+  }
+  if (config.publicUrl) rows.push([{ text: '🛍 Открыть магазин', app: true }]);
+  rows.push((u.orderIds || []).length ? [{ text: '📦 Мои заказы', cb: 'my' }, { text: '← Меню', cb: 'm' }] : [{ text: '← Меню', cb: 'm' }]);
+  return { text: lines.join('\n'), buttons: rows };
 }
 
 function cardView(u, id) {
@@ -189,10 +236,18 @@ function checkoutView(u) {
       return { text: `<b>Шаг 6 из 6.</b> Комментарий к заказу? Например: «разделать форель на стейки», «позвонить за час».`, buttons: [[{ text: 'Без комментария', cb: 'nc' }], [cancel]] };
     case 'confirm': {
       const s = cartSum(u);
+      const avail = u._loyal ? loyalty.maxSpend(u._loyal, s.sum) : 0;
+      const use = d.useBonus && avail > 0;
+      const total = [`<b>Примерно: ${P.rub(s.sum)}</b>`];
+      if (use) total.push(`💎 Бонусами: −${P.rub(avail)}`, `<b>К оплате: ${P.rub(s.sum - avail)}</b>`);
+      else if (avail) total.push(`<i>💎 Можно списать ${avail} бонусов</i>`);
+      const rows = [[{ text: '✅ Подтвердить заказ', cb: 'ok' }]];
+      if (avail) rows.push([{ text: use ? '↩️ Не списывать бонусы' : `💎 Списать ${avail} бонусов`, cb: 'bu' }]);
+      rows.push([{ text: '✎ Изменить данные', cb: 'co' }, { text: '🛒 Корзина', cb: 'cart' }]);
       return {
-        text: [`<b>Проверьте заказ</b>`, '', orders.linesText(s.lines), '', `<b>Примерно: ${P.rub(s.sum)}</b>`, '',
+        text: [`<b>Проверьте заказ</b>`, '', orders.linesText(s.lines), '', ...total, '',
           `👤 ${esc(d.name)}`, `📱 ${esc(d.phone)}`, `📍 ${esc(d.address)}`, `🕒 ${esc(d.time)}`, `💳 ${esc(d.pay)}`, ...(d.comment ? [`💬 ${esc(d.comment)}`] : [])].join('\n'),
-        buttons: [[{ text: '✅ Подтвердить заказ', cb: 'ok' }], [{ text: '✎ Изменить данные', cb: 'co' }, { text: '🛒 Корзина', cb: 'cart' }]],
+        buttons: rows,
       };
     }
   }
@@ -223,8 +278,10 @@ async function handle(ev, rawCtx) {
   u.name = ev.user.name; u.username = ev.user.username || '';
   const ctx = wrapCtx(u, rawCtx);
   try {
+    u._loyal = await loyalty.get(ev.platform, ev.user.id); // баланс нужен экрану подтверждения заказа
     await route(u, ev, ctx);
   } finally {
+    delete u._loyal;
     await store.saveUser(u);
   }
 }
@@ -259,6 +316,10 @@ async function route(u, ev, ctx) {
     u.step = null;
     const pl = String(ev.payload || '');
     if (/^p\d+$/.test(pl)) return ctx.reply(cardView(u, +pl.slice(1)));
+    if (/^ref_[A-Za-z0-9]{4,12}$/.test(pl)) {
+      const r = await loyalty.applyReferral(u.platform, u.userId, pl, { hasOrders: (u.orderIds || []).length > 0 });
+      if (r && r.welcome) await ctx.reply({ text: `🎁 Вас пригласил друг — дарим <b>${r.welcome} бонусов</b>! Ими можно оплатить часть первого заказа.` });
+    }
     return ctx.reply(menuView(u, true));
   }
 
@@ -287,6 +348,7 @@ async function onText(u, ev, ctx) {
   if (u.replyMap && u.replyMap[t]) { const cb = u.replyMap[t]; u.replyMap = null; return onCallback(u, { ...ev, data: cb }, { ...ctx, edit: ctx.reply }); }
   if (/^\/(start|menu|меню)$/i.test(t)) { u.step = null; return ctx.reply(menuView(u, t.toLowerCase() === '/start')); }
   if (/^\/cart$/i.test(t)) return ctx.reply(cartView(u));
+  if (/^\/(account|bonus|кабинет)$/i.test(t)) return ctx.reply(await accountView(u));
   if (/^\/(catalog|каталог)$/i.test(t)) return ctx.reply(catsView(u));
 
   switch (u.step) {
@@ -342,6 +404,8 @@ async function onCallback(u, ev, ctx) {
     case 'dl': return ctx.reply(deliveryView());
     case 'ct': return ctx.reply(contactView());
     case 'my': return ctx.reply(await myOrdersView(u));
+    case 'acc': return ctx.reply(await accountView(u));
+    case 'bu': if (u.step !== 'confirm') return; u.draft.useBonus = !u.draft.useBonus; return ctx.edit(checkoutView(u));
     case 'srch': u.step = 'search'; return ctx.reply({ text: 'Напишите, что ищете — например, <b>креветки</b>, <b>икра</b> или <b>форель</b>.' });
     case 'thx': return ctx.reply({ text: 'Спасибо! Ждём курьера вместе с вами 🐟' });
     case 'ask': {
@@ -369,7 +433,7 @@ async function onCallback(u, ev, ctx) {
     case 'ok': {
       if (u.step !== 'confirm') return ctx.toast('Заказ уже оформлен');
       const d = u.draft;
-      const r = await orders.create({ user: u, platform: u.platform, userId: u.userId, chatId: u.chatId, username: u.username, source: 'chat', verified: true, cart: u.cart, name: d.name, phone: d.phone, address: d.address, time: d.time, pay: d.pay, comment: d.comment });
+      const r = await orders.create({ user: u, platform: u.platform, userId: u.userId, chatId: u.chatId, username: u.username, source: 'chat', verified: true, cart: u.cart, name: d.name, phone: d.phone, address: d.address, time: d.time, pay: d.pay, comment: d.comment, useBonus: !!d.useBonus });
       if (!r.ok) return ctx.reply({ text: '⚠️ ' + r.errors.join('\n'), buttons: [[{ text: '🛒 Корзина', cb: 'cart' }]] });
       u.step = null; u.draft = {};
       return ctx.edit({ text: orders.customerText(r.order), buttons: [[{ text: '🐟 В каталог', cb: 'cats' }, { text: '📞 Менеджер', cb: 'ct' }]] });
@@ -448,4 +512,4 @@ async function managerHandle(u, ev, ctx) {
   return true;
 }
 
-module.exports = { handle, menuView, cartView, cardView, catView, catsView };
+module.exports = { handle, menuView, cartView, cardView, catView, catsView, accountView };

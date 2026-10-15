@@ -25,7 +25,7 @@ const absUrl = src => (!src ? '' : /^https?:\/\//.test(src) ? src : config.publi
 const readSeed = () => JSON.parse(JSON.stringify(SEED));
 
 function build() {
-  raw.cats ||= []; raw.products ||= []; raw.settings ||= {};
+  raw.cats ||= []; raw.products ||= []; raw.settings ||= {}; raw.promos ||= [];
   const cats = [...raw.cats].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0));
   const order = Object.fromEntries(cats.map((c, i) => [c.cid, i]));
   const products = raw.products
@@ -35,6 +35,7 @@ function build() {
     cats: cats.map(c => ({ ...c, count: products.filter(p => p.cid === c.cid && !p.out).length, total: products.filter(p => p.cid === c.cid).length, banner: absUrl(c.image) })),
     products,
     settings: { min_order: '0', ...raw.settings },
+    promos: [...raw.promos].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0)).map(x => ({ ...x, imageAbs: absUrl(x.image) })),
     byId: Object.fromEntries(products.map(p => [p.id, p])),
   };
   return state;
@@ -52,6 +53,7 @@ async function sync() {
     console.log('[catalog] создан каталог из стартового наполнения');
   }
   raw = doc;
+  if (!raw.promos) raw.promos = readSeed().promos || []; // старый каталог без акций — берём стартовые
   ver = v === null ? await db.get('catalog:ver') : v;
   return build();
 }
@@ -92,7 +94,7 @@ const isImage = s => s === '' || /^\/media\/[a-z0-9_-]+\.(jpg|png|webp)$/.test(s
 // Удаляем загруженное фото, если на него больше никто не ссылается
 async function dropImage(src) {
   if (!src || !src.startsWith('/media/')) return;
-  const used = raw.products.some(p => p.image === src) || raw.cats.some(c => c.image === src);
+  const used = raw.products.some(p => p.image === src) || raw.cats.some(c => c.image === src) || (raw.promos || []).some(x => x.image === src);
   if (!used) await media.remove(src).catch(() => {});
 }
 
@@ -217,15 +219,76 @@ async function moveCategory(cid, dir) {
   await commit();
 }
 
-const SETTINGS = { brand: 60, phone_tel: 40, phone_wa: 20, hours: 80, delivery: 400, payment: 200, price_date: 30, min_order: 10 };
+const SETTINGS = { brand: 60, phone_tel: 40, phone_wa: 20, hours: 80, delivery: 400, payment: 200, price_date: 30, min_order: 10,
+  bonus_enabled: 1, bonus_cashback: 4, bonus_max_pay: 4, bonus_welcome: 7, bonus_referrer: 7 };
+const BONUS_LIMITS = { bonus_cashback: 50, bonus_max_pay: 100, bonus_welcome: 100000, bonus_referrer: 100000 };
 async function saveSettings(input) {
   await sync();
   for (const [k, max] of Object.entries(SETTINGS)) if (input[k] !== undefined) raw.settings[k] = str(input[k], max);
   raw.settings.min_order = String(int(raw.settings.min_order, 0, 1_000_000));
+  if (raw.settings.bonus_enabled !== undefined) raw.settings.bonus_enabled = raw.settings.bonus_enabled === '0' ? '0' : '1';
+  for (const [k, max] of Object.entries(BONUS_LIMITS)) if (raw.settings[k] !== undefined && raw.settings[k] !== '') raw.settings[k] = String(int(raw.settings[k], 0, max));
   raw.settings.phone_wa = raw.settings.phone_wa.replace(/\D/g, '');
   if (!raw.settings.brand) fail('Укажите название магазина');
   await commit();
   return state.settings;
+}
+
+// ---------- акции (баннеры в приложении и боте) ----------
+const LINKS = ['none', 'product', 'category', 'sale', 'account', 'url'];
+async function savePromo(input) {
+  await sync();
+  const old = input.id ? raw.promos.find(x => x.id === input.id) : null;
+  if (input.id && !old) fail('Акция не найдена — возможно, её уже удалили');
+  const x = {
+    id: old ? old.id : 'pr' + crypto.randomBytes(4).toString('hex'),
+    title: str(input.title, 80),
+    text: str(input.text, 600),
+    badge: str(input.badge, 24),
+    image: str(input.image, 500),
+    btn: str(input.btn, 30),
+    link_type: LINKS.includes(input.link_type) ? input.link_type : 'none',
+    link_id: str(input.link_id, 300),
+    color: /^#[0-9a-f]{6}$/i.test(input.color || '') ? input.color : '',
+    from: str(input.from, 10),
+    to: str(input.to, 10),
+    active: input.active === undefined ? 1 : input.active ? 1 : 0,
+    popup: input.popup ? 1 : 0,
+    sort: old ? old.sort : raw.promos.reduce((m, y) => Math.min(m, y.sort ?? 0), 1) - 1, // новые — первыми
+  };
+  if (!x.title) fail('Укажите заголовок акции');
+  if (!isImage(x.image)) fail('Некорректное фото');
+  if (!isDate(x.from) || !isDate(x.to)) fail('Неверная дата акции');
+  if (x.from && x.to && x.from > x.to) fail('Акция заканчивается раньше, чем начинается');
+  if (x.link_type === 'product' && !raw.products.some(p => p.id === +x.link_id)) fail('Выберите товар для кнопки');
+  if (x.link_type === 'category' && !raw.cats.some(c => c.cid === x.link_id)) fail('Выберите категорию для кнопки');
+  if (x.link_type === 'url' && !/^https:\/\/[^\s"'<>]+$/.test(x.link_id)) fail('Ссылка должна начинаться с https://');
+  if (['none', 'sale', 'account'].includes(x.link_type)) x.link_id = '';
+  const prevImage = old ? old.image : '';
+  if (old) Object.assign(old, x); else raw.promos.push(x);
+  if (prevImage && prevImage !== x.image) await dropImage(prevImage);
+  await commit();
+  return state.promos.find(y => y.id === x.id);
+}
+async function deletePromo(id) {
+  await sync();
+  const i = raw.promos.findIndex(x => x.id === id);
+  if (i < 0) fail('Акция не найдена');
+  const [x] = raw.promos.splice(i, 1);
+  await dropImage(x.image);
+  await commit();
+}
+async function movePromo(id, dir) {
+  await sync();
+  const x = raw.promos.find(y => y.id === id);
+  if (!x) fail('Акция не найдена');
+  move(raw.promos, x, dir);
+  await commit();
+}
+// Действующие сейчас (по времени Сочи)
+function livePromos(now) {
+  const t = P.today(now);
+  return get().promos.filter(x => x.active && (!x.from || x.from <= t) && (!x.to || x.to >= t));
 }
 
 async function setImage(kind, id, src) {
@@ -264,5 +327,6 @@ module.exports = {
   get, sync, search, fullName, sales, thumbOf,
   saveProduct, quickProduct, deleteProduct, moveProduct,
   saveCategory, deleteCategory, moveCategory, saveSettings, setImage, InputError,
+  savePromo, deletePromo, movePromo, livePromos,
   _raw: async () => (await sync(), raw),
 };

@@ -25,6 +25,7 @@ async function pushOrder(o) {
     o.comment ? `Комментарий: ${o.comment}` : '',
     '', ...o.lines.map(l => `• ${l.name}${l.note ? ' (' + l.note + ')' : ''} — ${l.qtyLabel} — ${l.ask ? 'по запросу' : (l.approx ? '≈ ' : '') + l.sum + ' ₽'}`),
     '', `Примерно: ${o.sum} ₽ (точный вес подтверждает менеджер)`,
+    o.bonusUsed ? `Оплачено бонусами: ${o.bonusUsed} ₽, к оплате ${o.sum - o.bonusUsed} ₽` : '',
   ].filter(x => x !== '').join('\n');
 
   const fields = {
