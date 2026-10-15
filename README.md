@@ -147,8 +147,8 @@ cd /opt/seafood-bot && git pull && docker compose up -d --build
 ```
 api/index.js            точка входа на Vercel
 src/
-  index.js              запуск на VPS
-  app.js                подключение мессенджеров
+  start.js              запуск на VPS
+  setup.js              подключение мессенджеров
   db.js                 хранилище: файл (VPS) или Upstash Redis (Vercel)
   config.js             настройки из .env
   catalog.js            каталог: хранение, изменение, поиск

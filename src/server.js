@@ -171,4 +171,7 @@ function start() {
   return new Promise(r => srv.listen(config.port, () => { console.log(`[http] слушаю :${config.port}`); r(srv); }));
 }
 
-module.exports = { start, route, handle, publicCatalog };
+// Экспорт по умолчанию — сам обработчик: так файл годится и как точка входа Vercel
+require('./setup');
+module.exports = handle;
+Object.assign(module.exports, { start, route, handle, publicCatalog });

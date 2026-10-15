@@ -1,5 +1,5 @@
 // Запуск на обычном сервере (VPS, Docker): HTTP-сервер + боты в режиме polling или webhook
-const { config, hub } = require('./app');
+const { config, hub } = require('./setup');
 const catalog = require('./catalog');
 const store = require('./store');
 const server = require('./server');

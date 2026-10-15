@@ -9,4 +9,4 @@ COPY data ./data
 ENV DATA_DIR=/data NODE_ENV=production
 VOLUME /data
 EXPOSE 8080
-CMD ["node", "src/index.js"]
+CMD ["node", "src/start.js"]

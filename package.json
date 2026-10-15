@@ -2,11 +2,11 @@
   "name": "seafood-sochi-bot",
   "version": "1.0.0",
   "description": "Бот-магазин и мини-приложение Seafood Сочи для Telegram и MAX",
-  "main": "src/index.js",
+  "main": "src/start.js",
   "private": true,
   "engines": { "node": ">=20" },
   "scripts": {
-    "start": "node src/index.js",
+    "start": "node src/start.js",
     "test": "node --test test/run.js && TEST_BACKEND=redis node --test test/run.js",
     "import-images": "node scripts/import-images.js"
   },
