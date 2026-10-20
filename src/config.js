@@ -60,6 +60,8 @@ const config = {
 
   // Заказы из браузера (не из мессенджера) — по умолчанию разрешены, но помечаются
   allowWebOrders: env('ALLOW_WEB_ORDERS', '1') === '1',
+  geocode: env('GEOCODE', '1') === '1', // поиск адреса на карте (OpenStreetMap Nominatim)
+  cronSecret: env('CRON_SECRET', ''),     // ключ для вызова напоминаний внешним планировщиком
   timeSlots: list('TIME_SLOTS').length ? list('TIME_SLOTS') : ['Сегодня до 15:00', 'Сегодня 15:00–21:00', 'Завтра 9:00–13:00', 'Завтра 13:00–17:00', 'Завтра 17:00–21:00'],
   payments: ['Наличными', 'Картой через терминал', 'По QR-коду'],
 };
@@ -71,6 +73,8 @@ config.telegram.webhookSecret ||= derive('tg-hook', config.telegram.token);
 config.max.webhookSecret ||= derive('max-hook', config.max.token);
 // Секрет для подписи сессий админки; смена пароля разлогинивает всех
 config.admin.secret = crypto.createHash('sha256').update('sf-admin:' + config.admin.password).digest();
+// Ключ напоминаний для внешнего планировщика: если не задан — выводим из токена бота
+config.cronSecret ||= derive('cron', config.telegram.token || config.max.token || config.admin.password || 'seafood');
 config.appUrl = platform => `${config.publicUrl}/app/?p=${platform}`;
 config.uploadsDir = path.join(config.dataDir, 'uploads');
 

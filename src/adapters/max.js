@@ -30,6 +30,7 @@ function render(view) {
     return { type: 'callback', text: b.text.slice(0, 128), payload: String(b.cb).slice(0, 1024) };
   }).filter(Boolean)).filter(r => r.length).slice(0, 30);
   body.attachments = rows.length ? [{ type: 'inline_keyboard', payload: { buttons: rows } }] : [];
+  if (view.photo) body.attachments.unshift({ type: 'image', payload: { url: view.photo } });
   return body;
 }
 
@@ -43,6 +44,7 @@ async function send(target, view) {
 }
 
 async function edit(target, msgId, view) {
+  if (view.photo) return send(target, view); // сообщение с картинкой отправляем заново
   await api('PUT', '/messages', { message_id: msgId }, render(view));
   return { msgId };
 }
@@ -139,6 +141,14 @@ async function status() {
   return { enabled: true, username: me.username || me.name || String(me.user_id), link: me.username ? `https://max.ru/${me.username}` : '', webhook: urls.join(', '), connected: urls.includes(expected), botNameSet: !!process.env.MAX_BOT_NAME };
 }
 
+// Оформление бота: имя, описание, команды, аватар (по ссылке)
+async function brand({ name, description, commands, photoUrl }) {
+  const body = { name: name.slice(0, 64), description: description.slice(0, 200), commands: commands.map(c => ({ name: c.command, description: c.description })) };
+  if (photoUrl) body.photo = { url: photoUrl };
+  await api('PATCH', '/me', null, body);
+  return { ok: true, photo: !!photoUrl };
+}
+
 // Запуск на обычном сервере: polling или вебхук
 async function start() {
   if (!config.max.token) return console.log('[max] MAX_TOKEN не задан — MAX выключен');
@@ -160,4 +170,4 @@ async function webhook(headers, body) {
   return true;
 }
 
-module.exports = { start, connect, status, send, edit, handleUpdate, webhook, render, api, phoneFromContact, stop: () => { stopped = true; } };
+module.exports = { brand, start, connect, status, send, edit, handleUpdate, webhook, render, api, phoneFromContact, stop: () => { stopped = true; } };

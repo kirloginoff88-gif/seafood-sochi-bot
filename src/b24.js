@@ -25,7 +25,10 @@ async function pushOrder(o) {
     o.comment ? `Комментарий: ${o.comment}` : '',
     '', ...o.lines.map(l => `• ${l.name}${l.note ? ' (' + l.note + ')' : ''} — ${l.qtyLabel} — ${l.ask ? 'по запросу' : (l.approx ? '≈ ' : '') + l.sum + ' ₽'}`),
     '', `Примерно: ${o.sum} ₽ (точный вес подтверждает менеджер)`,
-    o.bonusUsed ? `Оплачено бонусами: ${o.bonusUsed} ₽, к оплате ${o.sum - o.bonusUsed} ₽` : '',
+    o.bonusUsed ? `Оплачено бонусами: ${o.bonusUsed} ₽` : '',
+    o.delivery ? (o.delivery.name ? `Доставка: ${o.delivery.name}, ${o.delivery.price ? o.delivery.price + ' ₽' : 'бесплатно'}` : 'Доставка: зона не определена') : '',
+    o.geo ? `Точка: https://yandex.ru/maps/?pt=${o.geo.lon},${o.geo.lat}&z=17` : '',
+    o.toPay !== undefined && o.toPay !== o.sum ? `К оплате: ${o.toPay} ₽` : '',
   ].filter(x => x !== '').join('\n');
 
   const fields = {

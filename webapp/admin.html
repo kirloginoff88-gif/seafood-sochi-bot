@@ -204,6 +204,28 @@ label.f small{font-weight:500;color:var(--muted)}
 .stats b{display:block;font-size:22px;color:var(--ink)}
 .stats small{color:var(--muted);font-size:12px;font-weight:600}
 .form h3{font-size:16px;color:var(--ink)}
+.form h3.sec{margin-top:10px;padding-top:14px;border-top:1px solid var(--line)}
+.brandrow{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.brandrow img{border-radius:12px;border:1px solid var(--line);background:var(--soft)}
+.brandrow .av{width:84px;height:84px;border-radius:50%;object-fit:cover}
+.brandrow .wb{width:220px;aspect-ratio:2/1;object-fit:cover}
+.code{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;word-break:break-all;user-select:all}
+/* доставка */
+.dz{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:14px;align-items:start}
+@media (max-width:900px){.dz{grid-template-columns:1fr}}
+#zmap{height:560px;border-radius:14px;border:1px solid var(--line);background:var(--soft);z-index:0}
+@media (max-width:900px){#zmap{height:420px}}
+.zside{display:flex;flex-direction:column;gap:10px}
+.zr{display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer}
+.zr:last-child{border-bottom:0}
+.zr i{width:14px;height:14px;border-radius:4px}
+.zr b{color:var(--ink);display:block}
+.zr small{color:var(--muted);font-size:12px;display:block}
+.zr.off{opacity:.5}
+.zf{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:10px}
+.zf .hint{background:var(--sea-soft);color:var(--sea);border-radius:10px;padding:9px 11px;font-size:12.5px;font-weight:600}
+.vx{width:14px!important;height:14px!important;margin:-7px 0 0 -7px!important;border-radius:50%;background:#fff;border:3px solid var(--ink);box-shadow:0 1px 4px rgba(0,0,0,.3);cursor:grab}
+.vx.first{border-color:var(--coral)}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:60;background:var(--ink);color:var(--bg);font-weight:700;font-size:13.5px;padding:10px 16px;border-radius:12px;max-width:90vw;text-align:center}
 .toast.bad{background:var(--coral);color:#fff}
 .empty{padding:36px 16px;text-align:center;color:var(--muted)}
@@ -216,6 +238,7 @@ label.f small{font-weight:500;color:var(--muted)}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
+<link rel="stylesheet" href="/static/leaflet.css">
 </head>
 <body>
 
@@ -238,6 +261,7 @@ label.f small{font-weight:500;color:var(--muted)}
         <button class="tab" data-tab="cats" type="button">Категории</button>
         <button class="tab" data-tab="orders" type="button">Заказы<span class="n" id="newCount" hidden></span></button>
         <button class="tab" data-tab="promos" type="button">Акции</button>
+        <button class="tab" data-tab="zones" type="button">Доставка</button>
         <button class="tab" data-tab="customers" type="button">Покупатели</button>
         <button class="tab" data-tab="settings" type="button">Настройки</button>
       </nav>
@@ -248,6 +272,7 @@ label.f small{font-weight:500;color:var(--muted)}
     <section id="t-cats" hidden></section>
     <section id="t-orders" hidden></section>
     <section id="t-promos" hidden></section>
+    <section id="t-zones" hidden></section>
     <section id="t-customers" hidden></section>
     <section id="t-settings" hidden></section>
   </main>
@@ -258,11 +283,13 @@ label.f small{font-weight:500;color:var(--muted)}
 <input type="file" id="file" accept="image/*" hidden>
 
 <script src="/app/pricing.js"></script>
+<script src="/static/zones.js"></script>
+<script src="/static/leaflet.js"></script>
 <script>
 (function(){
 'use strict';
 var P = window.Pricing;
-var S = { cats:[], products:[], settings:{}, promos:[] };
+var S = { cats:[], products:[], settings:{}, promos:[], zones:[], defaults:{} };
 var ui = { tab:'products', q:'', cid:'', filter:'all', ordersFilter:'active' };
 function $(id){ return document.getElementById(id); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
@@ -272,7 +299,7 @@ function api(path, body){
     .then(function(r){ return r.json().catch(function(){return {ok:false,error:'Ошибка сервера'};}).then(function(j){
       if(r.status===401 && path!=='login'){ showLogin(); throw new Error('auth'); }
       if(!j.ok) throw new Error(j.error||'Не получилось');
-      if(j.products){ S.cats=j.cats; S.products=j.products; S.settings=j.settings; S.promos=j.promos||[]; }
+      if(j.products){ S.cats=j.cats; S.products=j.products; S.settings=j.settings; S.promos=j.promos||[]; S.zones=j.zones||[]; S.defaults=j.defaults||{}; }
       return j; }); });
 }
 function fail(e){ if(e.message!=='auth') toast(e.message,true); }
@@ -294,10 +321,10 @@ $('tabs').addEventListener('click',function(e){
   var b=e.target.closest('[data-tab]'); if(!b) return;
   ui.tab=b.dataset.tab;
   document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t===b);});
-  ['products','cats','orders','promos','customers','settings'].forEach(function(t){ $('t-'+t).hidden=t!==ui.tab; });
+  ['products','cats','orders','promos','zones','customers','settings'].forEach(function(t){ $('t-'+t).hidden=t!==ui.tab; });
   render();
 });
-function render(){ ({products:renderProducts,cats:renderCats,orders:loadOrders,promos:renderPromos,customers:loadCustomers,settings:renderSettings})[ui.tab](); $('brand').textContent=S.settings.brand||'Seafood Сочи'; }
+function render(){ ({products:renderProducts,cats:renderCats,orders:loadOrders,promos:renderPromos,zones:renderZones,customers:loadCustomers,settings:renderSettings})[ui.tab](); $('brand').textContent=S.settings.brand||'Seafood Сочи'; }
 
 /* ---------- товары ---------- */
 function unitLabel(p){ return p.unit==='кг' ? '₽/кг' : '₽/шт'; }
@@ -495,7 +522,14 @@ function renderConn(st){
     (st.externalImages?'<button class="btn ghost sm" type="button" data-import>Перенести фото к себе ('+st.externalImages+')</button>':'')+'</div>'+
     '<p class="muted">«Подключить ботов» привязывает Telegram и MAX к этому адресу и ставит кнопку «Магазин». Нажмите после первого запуска и после смены токена.'+(st.externalImages?' Сейчас '+st.externalImages+' фото берутся по ссылкам с сайта — перенесите их, чтобы магазин не зависел от сайта.':'')+'</p>';
 }
-function loadConn(){ renderConn(null); api('bots').then(renderConn).catch(function(x){ fail(x); }); }
+function loadConn(){ renderConn(null); api('bots').then(function(st){ renderConn(st); renderRemindInfo(st); }).catch(function(x){ fail(x); }); }
+function renderRemindInfo(st){
+  var el=$('remindInfo'); if(!el) return;
+  if(st.avatar){ S._avatar=st.avatar; var a=$('avImg'); if(a) a.src=st.avatar; }
+  el.innerHTML='Ночью (21:00–9:00) не пишем. '+(st.serverless?'На Vercel проверка запускается сама вместе с сообщениями боту; чтобы напоминания уходили точно вовремя, добавьте бесплатное задание на <a href="https://cron-job.org" target="_blank" rel="noopener">cron-job.org</a> каждые 15 минут на адрес:<div class="code" style="margin-top:6px">'+esc(st.cronUrl)+'</div>':'На сервере проверка идёт каждые 5 минут.')+
+    '<div style="margin-top:8px"><button class="btn ghost sm" type="button" data-remindrun>Проверить корзины сейчас</button></div>'+
+    (st.brand?'<p style="margin-top:8px">Оформление бота применено: '+fmtDate(st.brand.at)+'</p>':'');
+}
 function renderSettings(){
   var s=S.settings;
   function bv(k,d){ return s[k]===undefined||s[k]===''?d:s[k]; }
@@ -510,6 +544,20 @@ function renderSettings(){
   '<label class="f">Подарок другу по ссылке, бонусов<input class="in" type="number" min="0" name="bonus_welcome" value="'+esc(bv('bonus_welcome',300))+'"></label>'+
   '<label class="f">Награда пригласившему, бонусов <small>после первого доставленного заказа друга</small><input class="in" type="number" min="0" name="bonus_referrer" value="'+esc(bv('bonus_referrer',500))+'"></label></div>'+
   '<p class="muted">1 бонус = 1 ₽. Если заказ отменён, списанные бонусы возвращаются покупателю автоматически.</p>'+
+  '<h3 class="sec">🤖 Оформление бота</h3>'+
+  '<div class="brandrow"><img class="av" id="avImg" src="'+esc(S._avatar||'/static/avatar.jpg')+'" alt="Аватар"><div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start"><b style="font-size:13px;color:var(--ink)">Аватар бота</b><span style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn ghost sm" type="button" data-photo="avatar">Загрузить свой</button><button class="btn ghost sm" type="button" data-avdefault>Поставить стандартный</button></span><span class="muted">Квадратная картинка; в мессенджере обрежется кругом</span></div></div>'+
+  '<div class="brandrow"><img class="wb" id="wbImg" src="'+esc(s.welcome_image||'/static/welcome.jpg')+'" alt="Баннер"><div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start"><b style="font-size:13px;color:var(--ink)">Картинка приветствия</b><span style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn ghost sm" type="button" data-photo="welcome">Загрузить свою</button>'+(s.welcome_image?'<button class="btn ghost sm" type="button" data-wbdefault>Стандартная</button>':'')+'</span><span class="muted">Горизонтальная 2:1, приходит вместе с приветствием</span></div></div>'+
+  '<input type="hidden" name="welcome_image" id="welcome_image" value="'+esc(s.welcome_image||'')+'">'+
+  '<label class="f">Приветствие после «Старт» <small>{name} — имя покупателя, {brand}, {cashback}; *текст* — жирный. Пусто — стандартное</small><textarea class="in" name="welcome_text" rows="9" placeholder="'+esc(S.defaults.welcome_text||'')+'">'+esc(s.welcome_text||'')+'</textarea></label>'+
+  '<label class="f">Описание бота <small>видно в пустом чате до нажатия «Старт», до 512 символов</small><textarea class="in" name="bot_description" maxlength="512" rows="6" placeholder="'+esc(S.defaults.bot_description||'')+'">'+esc(s.bot_description||'')+'</textarea></label>'+
+  '<label class="f">Короткое описание <small>в профиле бота и при пересылке ссылки, до 120 символов</small><input class="in" name="bot_short" maxlength="120" placeholder="'+esc(S.defaults.bot_short||'')+'" value="'+esc(s.bot_short||'')+'"></label>'+
+  '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm" type="button" data-brand>Сохранить и применить в Telegram и MAX</button><a class="btn ghost sm" href="/static/avatar.jpg" download="avatar.jpg">Скачать аватар</a><a class="btn ghost sm" href="/static/welcome.jpg" download="welcome.jpg">Скачать баннер</a></div>'+
+  '<p class="muted">Название бота берётся из «Название магазина». Картинку для пустого чата Telegram можно поставить только вручную: @BotFather → /setdescriptionpicture → загрузите баннер.</p>'+
+  '<h3 class="sec">🛒 Напоминания о корзине</h3>'+
+  '<div class="row2"><label class="f">Напоминания<select class="in" name="remind_enabled"><option value="1"'+(bv('remind_enabled','1')!=='0'?' selected':'')+'>Включены</option><option value="0"'+(bv('remind_enabled','1')==='0'?' selected':'')+'>Выключены</option></select></label>'+
+  '<label class="f">Через сколько часов напомнить <small>второй раз — через сутки</small><input class="in" type="number" min="1" max="72" name="remind_hours" value="'+esc(bv('remind_hours',3))+'"></label></div>'+
+  '<label class="f">Текст напоминания <small>{count} — «2 товара»; первая строка будет жирной. Ниже бот добавит список товаров и кнопки</small><textarea class="in" name="remind_text" rows="4" placeholder="'+esc(S.defaults.remind_text||'')+'">'+esc(s.remind_text||'')+'</textarea></label>'+
+  '<div id="remindInfo" class="muted"></div>'+
   '<div><button class="btn" type="submit">Сохранить</button></div></form>';
   loadConn();
 }
@@ -603,6 +651,88 @@ $('t-promos').addEventListener('change',function(e){
   api('promo/save',{promo:Object.assign({},x,{active:e.target.checked?1:0})}).then(function(){ toast(e.target.checked?'Акция включена':'Акция скрыта'); renderPromos(); }).catch(function(y){ fail(y); renderPromos(); });
 });
 
+/* ---------- зоны доставки ---------- */
+var ZMAP=null, ZLAYER=null, ZF=null, ZCOLORS=['#2E9E5B','#E0B12E','#E4772E','#D64545','#2F6FCB','#7A4FB5'];
+function renderZones(){
+  var el=$('t-zones');
+  if(!$('zmap')){
+    el.innerHTML='<div class="toolbar"><button class="btn" type="button" data-znew>+ Зона</button><span class="muted">Цветные зоны и тарифы видны покупателям на карте в магазине. Стоимость доставки считается по точке адреса автоматически.</span></div>'+
+      '<div class="dz"><div id="zmap"></div><div class="zside" id="zside"></div></div>';
+    ZMAP=L.map('zmap',{zoomControl:true}).setView([43.58,39.85],10);
+    L.tileLayer('/tiles/{z}/{x}/{y}.png',{maxZoom:18,minZoom:8,attribution:'© OpenStreetMap, © CARTO'}).addTo(ZMAP);
+    ZLAYER=L.layerGroup().addTo(ZMAP);
+    ZMAP.on('click',function(e){ if(!ZF) return; ZF.polygon.push([+e.latlng.lat.toFixed(5),+e.latlng.lng.toFixed(5)]); drawEditing(); });
+  } else setTimeout(function(){ ZMAP.invalidateSize(); },50);
+  drawZoneSide(); drawZones();
+}
+function drawZones(){
+  ZLAYER.clearLayers();
+  S.zones.forEach(function(z){
+    if(ZF && ZF.id===z.id) return;
+    if(!z.polygon||z.polygon.length<3) return;
+    L.polygon(z.polygon,{color:z.color,weight:2,fillOpacity:z.active?0.28:0.08,dashArray:z.active?null:'4 4'}).addTo(ZLAYER).bindTooltip(esc(z.name)).on('click',function(ev){ if(ZF) return; L.DomEvent.stop(ev); editZone(z.id); });
+  });
+  if(ZF) drawEditing();
+}
+var ZEDIT=null;
+function drawEditing(){
+  if(ZEDIT) ZEDIT.remove();
+  ZEDIT=L.layerGroup().addTo(ZMAP);
+  if(ZF.polygon.length>=2) L.polygon(ZF.polygon,{color:ZF.color,weight:3,fillOpacity:0.35}).addTo(ZEDIT);
+  ZF.polygon.forEach(function(p,i){
+    var m=L.marker(p,{draggable:true,icon:L.divIcon({className:'vx'+(i===0?' first':''),iconSize:[14,14]})}).addTo(ZEDIT);
+    m.on('dragend',function(){ var ll=m.getLatLng(); ZF.polygon[i]=[+ll.lat.toFixed(5),+ll.lng.toFixed(5)]; drawEditing(); });
+    m.on('contextmenu dblclick',function(ev){ L.DomEvent.stop(ev); ZF.polygon.splice(i,1); drawEditing(); });
+  });
+  var n=$('zpts'); if(n) n.textContent=ZF.polygon.length;
+}
+function zoneLine(z){ return (window.Zones?Zones.tariff(z):'')+(z.eta?' · '+z.eta:''); }
+function drawZoneSide(){
+  var side=$('zside'); if(!side) return;
+  if(!ZF){
+    if(ZEDIT){ ZEDIT.remove(); ZEDIT=null; }
+    var strict=S.settings.zone_strict==='1';
+    side.innerHTML=(S.zones.length?'<div class="list">'+S.zones.map(function(z){
+      return '<div class="zr'+(z.active?'':' off')+'" data-zedit="'+esc(z.id)+'"><i style="background:'+esc(z.color)+'"></i><div><b>'+esc(z.name)+'</b><small>'+esc(zoneLine(z))+'</small></div>'+
+        '<span class="mv"><button type="button" data-zmove="'+esc(z.id)+'" data-dir="-1" aria-label="Выше">▲</button><button type="button" data-zmove="'+esc(z.id)+'" data-dir="1" aria-label="Ниже">▼</button></span></div>';
+    }).join('')+'</div>':'<div class="empty">Зон пока нет. Нажмите «+ Зона» и обведите район на карте.</div>')+
+    '<label class="sw"><input type="checkbox" id="zstrict"'+(strict?' checked':'')+'><i></i><span style="color:var(--ink);font-size:13px">Не принимать заказы вне зон</span></label>'+
+    '<p class="muted">Если зоны пересекаются, действует верхняя в списке. Без отметки заказ вне зон всё равно придёт — с пометкой, что условия доставки надо согласовать.</p>';
+    drawZones(); return;
+  }
+  var f=ZF;
+  side.innerHTML='<div class="zf"><b style="color:var(--ink)">'+(f.id?'Зона':'Новая зона')+'</b>'+
+    '<div class="hint">Нажимайте на карту, чтобы обвести район. Точки можно перетаскивать; двойной клик по точке — удалить. Точек: <span id="zpts">'+f.polygon.length+'</span></div>'+
+    '<label class="f">Название<input class="in" data-zf="name" value="'+esc(f.name)+'" maxlength="60" placeholder="Центр Сочи"></label>'+
+    '<div class="f" style="display:flex;flex-direction:column;gap:6px"><b style="font-size:13px;color:var(--ink)">Цвет</b><div class="colors">'+ZCOLORS.map(function(c){return '<button type="button" data-zcolor="'+c+'" class="'+(c===f.color?'on':'')+'" style="background:'+c+'"></button>';}).join('')+'</div></div>'+
+    '<div class="row2"><label class="f">Доставка, ₽ <small>0 — бесплатно</small><input class="in" type="number" min="0" data-zf="price" value="'+(+f.price||0)+'"></label>'+
+    '<label class="f">Бесплатно от, ₽ <small>0 — без порога</small><input class="in" type="number" min="0" data-zf="free_from" value="'+(+f.free_from||0)+'"></label>'+
+    '<label class="f">Мин. заказ, ₽ <small>0 — общий</small><input class="in" type="number" min="0" data-zf="min_order" value="'+(+f.min_order||0)+'"></label>'+
+    '<label class="f">Срок <small>необязательно</small><input class="in" data-zf="eta" maxlength="60" value="'+esc(f.eta)+'" placeholder="2–4 часа"></label></div>'+
+    '<label class="sw"><input type="checkbox" data-zfc="active"'+(f.active?' checked':'')+'><i></i><span style="color:var(--ink);font-size:13px">Зона действует</span></label>'+
+    '<div class="err" id="zerr" hidden></div>'+
+    '<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn" type="button" id="zsave">Сохранить</button><button class="btn ghost sm" type="button" data-zundo>Отменить точку</button><button class="btn ghost sm" type="button" data-zclear>Очистить контур</button><button class="btn ghost sm" type="button" data-zcancel>Закрыть</button>'+
+    (f.id?'<button class="btn danger sm'+(f._sure?' sure':'')+'" type="button" data-zdel>'+(f._sure?'Точно удалить?':'Удалить')+'</button>':'')+'</div></div>';
+  drawZones();
+}
+function editZone(id){
+  var z=id?S.zones.find(function(x){return x.id===id;}):null;
+  ZF=JSON.parse(JSON.stringify(Object.assign({id:'',name:'',color:ZCOLORS[S.zones.length%ZCOLORS.length],price:300,free_from:0,min_order:0,eta:'',polygon:[],active:1},z||{})));
+  drawZoneSide();
+  if(z&&z.polygon.length) ZMAP.fitBounds(L.polygon(z.polygon).getBounds(),{padding:[30,30]});
+}
+$('t-zones').addEventListener('input',function(e){ if(ZF && e.target.dataset.zf) ZF[e.target.dataset.zf]=e.target.value; });
+$('t-zones').addEventListener('change',function(e){
+  if(ZF && e.target.dataset.zfc) ZF[e.target.dataset.zfc]=e.target.checked?1:0;
+  if(e.target.id==='zstrict') api('settings/save',{settings:{zone_strict:e.target.checked?'1':'0'}}).then(function(){ toast(e.target.checked?'Заказы вне зон не принимаются':'Заказы вне зон принимаются с пометкой'); }).catch(fail);
+});
+$('t-zones').addEventListener('click',function(e){
+  if(e.target.id!=='zsave') return;
+  var err=$('zerr'); err.hidden=true;
+  var z={}; ['id','name','color','price','free_from','min_order','eta','polygon','active'].forEach(function(k){ z[k]=ZF[k]; });
+  api('zone/save',{zone:z}).then(function(){ ZF=null; toast('Зона сохранена'); renderZones(); }).catch(function(x){ if(x.message==='auth') return; err.textContent=x.message; err.hidden=false; });
+});
+
 /* ---------- покупатели ---------- */
 var CUS=[], cq='', openHist={};
 function loadCustomers(){
@@ -630,6 +760,11 @@ function renderCustomers(){
 }
 document.addEventListener('input',function(e){ if(e.target.id==='cq'){ cq=e.target.value.trim().toLowerCase(); renderCustomers(); } });
 
+function brandToast(r){
+  var bad=[]; ['tg','max'].forEach(function(k){ var x=r&&r[k]; if(!x) return; if(x.error) bad.push((k==='tg'?'Telegram':'MAX')+': '+x.error); else Object.keys(x).forEach(function(f){ if(x[f]!==true && f!=='photo') bad.push((k==='tg'?'Telegram':'MAX')+' '+f+': '+x[f]); if(f==='photo'&&x[f]!==true&&x[f]!==false) bad.push((k==='tg'?'Telegram':'MAX')+' аватар: '+x[f]); }); });
+  toast(bad.length?bad.join('; '):'Готово: оформление применено', !!bad.length);
+}
+
 /* ---------- фото ---------- */
 var photoTarget=null;
 function resize(file,max,q){
@@ -652,12 +787,14 @@ $('file').addEventListener('change',function(){
     .then(function(j){
       if(photoTarget==='product' && F){ F.image=j.image; drawProduct(); toast('Фото загружено — не забудьте сохранить'); }
       if(photoTarget==='promo' && PF){ PF.image=j.image; drawPromo(); toast('Картинка загружена — не забудьте сохранить'); }
+      if(photoTarget==='welcome'){ $('welcome_image').value=j.image; $('wbImg').src=j.image; toast('Картинка загружена — нажмите «Сохранить»'); }
+      if(photoTarget==='avatar'){ toast('Ставим аватар…'); api('bot/brand',{avatar:j.image,photo:true}).then(function(r){ S._avatar=j.image; $('avImg').src=j.image; brandToast(r.result); }).catch(fail); }
     }).catch(fail);
 });
 
 /* ---------- клики ---------- */
 document.addEventListener('click',function(e){
-  var t=e.target.closest('button,[data-edit],[data-pedit],[data-close]'); if(!t) return; var d=t.dataset;
+  var t=e.target.closest('button,[data-edit],[data-pedit],[data-zedit],[data-close]'); if(!t) return; var d=t.dataset;
   if(d.close!==undefined) return closeModal();
   if(d.new!==undefined) return openProduct(0);
   if(d.edit) return openProduct(d.edit);
@@ -675,6 +812,24 @@ document.addEventListener('click',function(e){
     return api('promo/delete',{id:PF.id}).then(function(){ closeModal(); toast('Акция удалена'); renderPromos(); }).catch(fail);
   }
   if(d.creload!==undefined) return loadCustomers();
+  if(d.avdefault!==undefined){ return api('bot/brand',{avatar:'',photo:true}).then(function(r){ S._avatar=''; $('avImg').src='/static/avatar.jpg'; brandToast(r.result); }).catch(fail); }
+  if(d.wbdefault!==undefined){ $('welcome_image').value=''; $('wbImg').src='/static/welcome.jpg'; return toast('Нажмите «Сохранить», чтобы вернуть стандартную картинку'); }
+  if(d.brand!==undefined){
+    var data={}; new FormData($('sf')).forEach(function(v,k){ data[k]=v; }); t.disabled=true;
+    return api('settings/save',{settings:data}).then(function(){ return api('bot/brand',{}); }).then(function(r){ t.disabled=false; brandToast(r.result); }).catch(function(x){ t.disabled=false; fail(x); });
+  }
+  if(d.remindrun!==undefined) return api('reminders/run',{force:true}).then(function(r){ toast(r.skipped?'Напоминания '+r.skipped:'Отправлено напоминаний: '+r.sent+(r.waiting?', ждут своего часа: '+r.waiting:'')); }).catch(fail);
+  if(d.znew!==undefined) return editZone(null);
+  if(d.zedit) return editZone(d.zedit);
+  if(d.zcancel!==undefined){ ZF=null; return drawZoneSide(); }
+  if(d.zundo!==undefined){ ZF.polygon.pop(); return drawEditing(); }
+  if(d.zclear!==undefined){ ZF.polygon=[]; return drawEditing(); }
+  if(d.zmove) return api('zone/move',{id:d.zmove,dir:+d.dir}).then(renderZones).catch(fail);
+  if(d.zcolor){ ZF.color=d.zcolor; drawZoneSide(); return drawEditing(); }
+  if(d.zdel!==undefined){
+    if(!ZF._sure){ ZF._sure=true; drawZoneSide(); return; }
+    return api('zone/delete',{id:ZF.id}).then(function(){ ZF=null; toast('Зона удалена'); renderZones(); }).catch(fail);
+  }
   if(d.chist){ if(openHist[d.chist]){ delete openHist[d.chist]; return renderCustomers(); } return api('customer?key='+encodeURIComponent(d.chist)).then(function(j){ openHist[d.chist]=j.history; renderCustomers(); }).catch(fail); }
   if(d.cbonus){
     var amt=document.querySelector('[data-camt="'+d.cbonus+'"]').value, rsn=document.querySelector('[data-crsn="'+d.cbonus+'"]').value;

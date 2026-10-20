@@ -21,6 +21,11 @@ const STATIC = {
   'index.html': ['text/html; charset=utf-8', () => fs.readFileSync(path.join(__dirname, '..', 'webapp', 'index.html'))],
   'admin.html': ['text/html; charset=utf-8', () => fs.readFileSync(path.join(__dirname, '..', 'webapp', 'admin.html'))],
   'pricing.js': ['text/javascript; charset=utf-8', () => fs.readFileSync(path.join(__dirname, 'shared', 'pricing.js'))],
+  'zones.js': ['text/javascript; charset=utf-8', () => fs.readFileSync(path.join(__dirname, 'shared', 'zones.js'))],
+  'leaflet.js': ['text/javascript; charset=utf-8', () => fs.readFileSync(path.join(__dirname, '..', 'webapp', 'vendor', 'leaflet.js'))],
+  'leaflet.css': ['text/css; charset=utf-8', () => fs.readFileSync(path.join(__dirname, '..', 'webapp', 'vendor', 'leaflet.css'))],
+  'avatar.jpg': ['image/jpeg', () => fs.readFileSync(path.join(__dirname, '..', 'webapp', 'assets', 'avatar.jpg'))],
+  'welcome.jpg': ['image/jpeg', () => fs.readFileSync(path.join(__dirname, '..', 'webapp', 'assets', 'welcome.jpg'))],
 };
 const cache = {};
 function sendStatic(res, name, cacheControl = 'no-cache') {
@@ -42,6 +47,7 @@ function auth(body) {
 
 // Не больше 15 заказов в час с одного IP
 const limited = limiter(15, 3600e3);
+const geoLimited = limiter(40, 600e3);
 
 function publicCatalog() {
   const c = catalog.get();
@@ -52,6 +58,8 @@ function publicCatalog() {
     settings: { brand: s.brand, phone_tel: s.phone_tel, phone_wa: s.phone_wa, hours: s.hours, delivery: s.delivery, payment: s.payment, price_date: s.price_date, min_order: +s.min_order || 0 },
     promos: catalog.livePromos().map(x => ({ id: x.id, title: x.title, text: x.text, badge: x.badge, image: x.image, btn: x.btn, link_type: x.link_type, link_id: x.link_id, color: x.color, to: x.to, popup: x.popup })),
     bonus: loyalty.cfg(),
+    zones: (c.zones || []).filter(z => z.active !== 0).map(({ id, name, color, price, free_from, min_order, eta, polygon }) => ({ id, name, color, price, free_from, min_order, eta, polygon })),
+    zoneStrict: s.zone_strict === '1',
     timeSlots: config.timeSlots,
     payments: config.payments,
   };
@@ -89,7 +97,16 @@ async function route(req, res) {
     const a = hub.adapters[p.endsWith('tg') ? 'tg' : 'max'];
     if (!body || !a) return json(res, 403, { ok: false });
     const ok = await a.webhook(req.headers, body);
+    if (ok) await require('./reminders').maybeRun(); // напоминания о корзине «заодно», не чаще раза в 10 минут
     return json(res, ok ? 200 : 403, { ok });
+  }
+
+  // --- напоминания о брошенных корзинах: внешний планировщик (cron-job.org) или Vercel Cron ---
+  if (p === '/cron/reminders') {
+    const key = url.searchParams.get('key') || String(req.headers.authorization || '').replace(/^Bearer /, '');
+    if (key !== config.cronSecret) return json(res, 403, { ok: false });
+    await catalog.sync();
+    return json(res, 200, { ok: true, ...(await require('./reminders').run()) });
   }
 
   // --- фото товаров ---
@@ -100,6 +117,15 @@ async function route(req, res) {
     res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'public, max-age=31536000, s-maxage=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
     return res.end(buf);
   }
+
+  // --- общая статика: карта, фирменные картинки ---
+  if (req.method === 'GET' && p.startsWith('/static/')) {
+    const name = p.slice(8);
+    if (STATIC[name] && !name.endsWith('.html')) return sendStatic(res, name, 'public, max-age=86400');
+    return json(res, 404, { ok: false });
+  }
+  // --- плитки карты: отдаём через свой адрес и кэшируем (так карта открывается и там, где внешние сервисы недоступны) ---
+  if (req.method === 'GET' && p.startsWith('/tiles/')) return require('./tiles').serve(req, res, p);
 
   // --- статика мини-приложения ---
   if (req.method === 'GET' && (p === '/app' || p.startsWith('/app/'))) {
@@ -124,6 +150,15 @@ async function route(req, res) {
   if (req.method === 'GET' && p === '/api/catalog') {
     const tg = hub.adapters.tg ? await loyalty.botName('tg') : '';
     return json(res, 200, { ...publicCatalog(), bots: { tg: tg ? `https://t.me/${tg}` : '' } });
+  }
+
+  // Поиск адреса на карте и адрес по точке
+  if (req.method === 'GET' && p === '/api/geocode') {
+    if (geoLimited(clientIp(req))) return json(res, 429, { ok: false, error: 'Слишком много запросов, попробуйте через минуту' });
+    const geo = require('./geocode');
+    const lat = url.searchParams.get('lat'), lon = url.searchParams.get('lon');
+    const r = lat && lon ? await geo.reverse(lat, lon) : await geo.search(url.searchParams.get('q'));
+    return json(res, 200, r ? { ok: true, ...r } : { ok: false });
   }
 
   if (req.method === 'POST' && p === '/api/session') {
@@ -155,7 +190,9 @@ async function route(req, res) {
     if (!who) return json(res, 401, { ok: false });
     if (who.platform === 'web') return json(res, 200, { ok: true });
     const u = await store.getUser(who.platform, who.user.id);
+    const before = JSON.stringify(u.cart);
     u.cart = cleanCart(body.cart); u.pick = {};
+    if (JSON.stringify(u.cart) !== before) await require('./reminders').touch(u);
     await store.saveUser(u);
     return json(res, 200, { ok: true, cart: u.cart });
   }
@@ -173,13 +210,13 @@ async function route(req, res) {
       user: u, platform: who.platform, userId: who.user?.id, chatId: u?.chatId, username: who.user?.username,
       source: who.platform === 'web' ? 'web' : 'app', verified: who.verified,
       cart: cleanCart(body.cart), name: f.name, phone: f.phone, address: f.address, time: f.time, pay: f.pay, comment: f.comment,
-      useBonus: !!f.useBonus,
+      useBonus: !!f.useBonus, geo: f.geo,
     });
     if (u) await store.saveUser(u);
     if (!r.ok) return json(res, 422, r);
     // Дублируем подтверждение в чат с ботом — там же покупатель увидит статусы
     if (who.platform !== 'web') await hub.send(who.platform, u?.chatId ? { chatId: u.chatId } : { userId: who.user.id }, { text: orders.customerText(r.order), buttons: [[{ text: '📦 Мои заказы', cb: 'my' }]] });
-    return json(res, 200, { ok: true, id: r.order.id, sum: r.order.sum, bonusUsed: r.order.bonusUsed || 0, toPay: r.order.toPay });
+    return json(res, 200, { ok: true, id: r.order.id, sum: r.order.sum, bonusUsed: r.order.bonusUsed || 0, toPay: r.order.toPay, delivery: r.order.delivery || null });
   }
 
   json(res, 404, { ok: false });

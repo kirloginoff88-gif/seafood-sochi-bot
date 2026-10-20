@@ -39,7 +39,7 @@ function render(view) {
   }
   const inline = rows.map(r => r.map(b => {
     if (b.url) return { text: b.text, url: b.url };
-    if (b.app) return config.publicUrl ? { text: b.text, web_app: { url: config.appUrl('tg') } } : null;
+    if (b.app) return config.publicUrl ? { text: b.text, web_app: { url: config.appUrl('tg') + (typeof b.app === 'string' ? '&tab=' + b.app : '') } } : null;
     return { text: b.text, callback_data: String(b.cb).slice(0, 64) };
   }).filter(Boolean)).filter(r => r.length);
   if (inline.length) p.reply_markup = { inline_keyboard: inline };
@@ -50,6 +50,12 @@ function render(view) {
 async function send(target, view) {
   const chatId = target.chatId || target.userId;
   const p = render(view);
+  if (view.photo) {
+    // Картинка с подписью (подпись до 1024 символов) и теми же кнопками
+    const { text, link_preview_options, ...rest } = p;
+    const m = await api('sendPhoto', { chat_id: chatId, photo: view.photo, caption: text.slice(0, 1024), ...rest });
+    return { msgId: m.message_id };
+  }
   const m = await api('sendMessage', { chat_id: chatId, ...p });
   return { msgId: m.message_id };
 }
@@ -57,7 +63,7 @@ async function send(target, view) {
 async function edit(target, msgId, view) {
   const chatId = target.chatId || target.userId;
   const p = render(view);
-  if (p.reply_markup && !p.reply_markup.inline_keyboard) return send(target, view); // обычную клавиатуру нельзя поставить правкой
+  if (view.photo || (p.reply_markup && !p.reply_markup.inline_keyboard)) return send(target, view); // обычную клавиатуру и картинку правкой не поставить
   try {
     await api('editMessageText', { chat_id: chatId, message_id: msgId, ...p });
     return { msgId };
@@ -109,14 +115,40 @@ async function handleUpdate(up) {
 
 const UPDATES = ['message', 'callback_query'];
 
+const COMMANDS = [
+  { command: 'start', description: 'Открыть магазин и меню' },
+  { command: 'catalog', description: 'Каталог' },
+  { command: 'cart', description: 'Корзина' },
+  { command: 'account', description: 'Кабинет и бонусы' },
+  { command: 'delivery', description: 'Доставка и зоны' },
+];
+
+// Оформление бота: имя, описание (до старта), короткое описание (в профиле), команды, аватар
+async function brand({ name, description, short, photo }) {
+  const out = {};
+  const step = async (k, fn) => { try { await fn(); out[k] = true; } catch (e) { out[k] = e.message; } };
+  await step('name', () => api('setMyName', { name: name.slice(0, 64) }));
+  await step('description', () => api('setMyDescription', { description: description.slice(0, 512) }));
+  await step('short', () => api('setMyShortDescription', { short_description: short.slice(0, 120) }));
+  await step('commands', () => api('setMyCommands', { commands: COMMANDS }));
+  if (photo) await step('photo', () => apiForm('setMyProfilePhoto', { photo: JSON.stringify({ type: 'static', photo: 'attach://avatar' }) }, { avatar: photo }));
+  return out;
+}
+
+// Запрос с файлом (multipart): нужен для аватара
+async function apiForm(method, fields, files) {
+  const fd = new FormData();
+  for (const [k, v] of Object.entries(fields)) fd.append(k, v);
+  for (const [k, buf] of Object.entries(files)) fd.append(k, new Blob([buf], { type: 'image/jpeg' }), k + '.jpg');
+  const res = await fetch(BASE() + method, { method: 'POST', body: fd, signal: AbortSignal.timeout(30000) });
+  const json = await res.json().catch(() => ({ ok: false, description: 'bad json' }));
+  if (!json.ok) throw new Error(`${method}: ${json.description || res.status}`);
+  return json.result;
+}
+
 // Команды и кнопка «Магазин»
 async function setup() {
-  await api('setMyCommands', { commands: [
-    { command: 'menu', description: 'Главное меню' },
-    { command: 'catalog', description: 'Каталог' },
-    { command: 'cart', description: 'Корзина' },
-    { command: 'account', description: 'Кабинет и бонусы' },
-  ] }).catch(e => console.warn('[tg] commands:', e.message));
+  await api('setMyCommands', { commands: COMMANDS }).catch(e => console.warn('[tg] commands:', e.message));
   if (config.publicUrl) {
     await api('setChatMenuButton', { menu_button: { type: 'web_app', text: 'Магазин', web_app: { url: config.appUrl('tg') } } })
       .catch(e => console.warn('[tg] menu button:', e.message));
@@ -183,4 +215,4 @@ async function webhook(headers, body) {
   return true;
 }
 
-module.exports = { start, connect, status, send, edit, handleUpdate, webhook, render, api, stop: () => { stopped = true; } };
+module.exports = { brand, COMMANDS, start, connect, status, send, edit, handleUpdate, webhook, render, api, stop: () => { stopped = true; } };

@@ -46,6 +46,8 @@ function adminState() {
     products: c.products.map(({ thumb, imageAbs, ...p }) => ({ ...p, thumb })),
     settings: c.settings,
     promos: c.promos.map(({ imageAbs, ...x }) => x),
+    zones: c.zones,
+    defaults: { ...require('./branding').DEFAULTS, remind_text: require('./reminders').DEFAULT_TEXT },
   };
 }
 
@@ -74,7 +76,7 @@ async function orderList(filter) {
 // Состояние подключения ботов — для блока «Подключение» в настройках
 async function botsStatus() {
   const external = catalog.get().products.filter(p => /^https?:\/\//.test(p.image || '')).length;
-  const out = { publicUrl: config.publicUrl, storage: db.kind, serverless: config.serverless, externalImages: external, tg: { enabled: false }, max: { enabled: false } };
+  const out = { cronUrl: config.publicUrl ? `${config.publicUrl}/cron/reminders?key=${config.cronSecret}` : '', brand: await db.get('brand:applied'), avatar: await db.get('brand:avatar'), publicUrl: config.publicUrl, storage: db.kind, serverless: config.serverless, externalImages: external, tg: { enabled: false }, max: { enabled: false } };
   for (const pl of ['tg', 'max']) {
     if (!hub.adapters[pl]) continue;
     try { out[pl] = await hub.adapters[pl].status(); } catch (e) { out[pl] = { enabled: true, error: e.message }; }
@@ -140,6 +142,18 @@ async function handle(req, res, url) {
         if (body.notify !== false) await hub.send(pl, { userId: id }, { text: amount > 0 ? `🎁 Вам начислено <b>${amount} бонусов</b>: ${orders.esc(reason)}.\nНа счёте: <b>${d.balance}</b>.` : `💎 Списано ${-amount} бонусов: ${orders.esc(reason)}. На счёте: <b>${d.balance}</b>.` });
         return json(res, 200, { ok: true, balance: d.balance, customers: await customerList() }), true;
       }
+      case 'zone/save': { const zone = await catalog.saveZone(body.zone || {}); return json(res, 200, { ok: true, zone, ...adminState() }), true; }
+      case 'zone/delete': await catalog.deleteZone(body.id); return json(res, 200, { ok: true, ...adminState() }), true;
+      case 'zone/move': await catalog.moveZone(body.id, body.dir); return json(res, 200, { ok: true, ...adminState() }), true;
+      case 'bot/brand': {
+        if (body.avatar !== undefined) {
+          if (body.avatar && !/^\/media\/[a-z0-9_-]+\.(jpg|png|webp)$/.test(body.avatar)) return json(res, 400, { ok: false, error: 'Некорректный аватар' }), true;
+          if (body.avatar) await db.set('brand:avatar', body.avatar); else await db.del('brand:avatar');
+        }
+        const result = await require('./branding').apply({ photo: !!body.photo });
+        return json(res, 200, { ok: true, result, ...(await botsStatus()) }), true;
+      }
+      case 'reminders/run': return json(res, 200, { ok: true, ...(await require('./reminders').run({ force: !!body.force })) }), true;
       case 'settings/save': await catalog.saveSettings(body.settings || {}); return json(res, 200, { ok: true, ...adminState() }), true;
       case 'upload': {
         const full = media.fromDataUrl(body.full);
@@ -153,6 +167,9 @@ async function handle(req, res, url) {
           if (!hub.adapters[pl]) continue;
           try { await hub.adapters[pl].connect(); } catch (e) { out[pl] = e.message; }
         }
+        // Заодно оформляем бота: тексты всегда, аватар — только в первый раз
+        const applied = await db.get('brand:applied');
+        await require('./branding').apply({ photo: !applied || !applied.photo }).catch(e => console.warn('[brand]', e.message));
         return json(res, 200, { ok: true, errors: out, ...(await botsStatus()) }), true;
       }
       case 'images/import': {

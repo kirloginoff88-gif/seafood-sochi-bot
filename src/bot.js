@@ -12,6 +12,8 @@ const store = require('./store');
 const orders = require('./orders');
 const config = require('./config');
 const loyalty = require('./loyalty');
+const branding = require('./branding');
+const Z = require('./shared/zones');
 const { esc } = orders;
 
 const PAGE = 10;
@@ -26,16 +28,15 @@ function cartBtnLabel(u) {
 function menuView(u, greet) {
   const s = catalog.get().settings;
   const hasSales = catalog.sales().length > 0 || catalog.livePromos().length > 0;
-  const text = greet
-    ? `Здравствуйте${u.profile.name ? ', ' + esc(u.profile.name) : ''}! Это <b>${esc(s.brand || 'Seafood Сочи')}</b> 🐟\n\nСвежая и замороженная рыба, икра, креветки, крабы и копчёности с доставкой по Сочи. ${esc(s.hours || '')}.\n\nОткройте магазин с фото и корзиной или выберите раздел прямо здесь. Можно просто написать, что ищете: «креветки», «икра».`
-    : 'Главное меню. Что вас интересует?';
+  const w = greet ? branding.welcome(u.profile.name || u.name || '') : null;
+  const text = w ? w.text : 'Главное меню. Что вас интересует?';
   const rows = [];
   if (config.publicUrl) rows.push([{ text: '🛍 Открыть магазин', app: true }]);
   rows.push(hasSales ? [{ text: '🐟 Каталог', cb: 'cats' }, { text: '🔥 Акции', cb: 'sale' }] : [{ text: '🐟 Каталог', cb: 'cats' }, { text: '🔎 Поиск', cb: 'srch' }]);
   rows.push(hasSales ? [{ text: cartBtnLabel(u), cb: 'cart' }, { text: '🔎 Поиск', cb: 'srch' }] : [{ text: cartBtnLabel(u), cb: 'cart' }]);
   rows.push([{ text: '👤 Кабинет и бонусы', cb: 'acc' }, { text: '📞 Менеджер', cb: 'ct' }]);
   rows.push((u.orderIds || []).length ? [{ text: '🚚 Доставка и оплата', cb: 'dl' }, { text: '📦 Мои заказы', cb: 'my' }] : [{ text: '🚚 Доставка и оплата', cb: 'dl' }]);
-  return { text, buttons: rows };
+  return w && w.photo ? { text, photo: w.photo, buttons: rows } : { text, buttons: rows };
 }
 
 function catsView(u) {
@@ -180,11 +181,24 @@ function cartView(u) {
   return { text, buttons: rows };
 }
 
+function zonesText() {
+  const zones = (catalog.get().zones || []).filter(z => z.active !== 0);
+  if (!zones.length) return '';
+  return '\n\n<b>Зоны доставки</b>\n' + zones.map(z => `${zoneDot(z.color)} <b>${esc(z.name)}</b>: ${esc(Z.tariff(z))}${z.eta ? ` · ${esc(z.eta)}` : ''}`).join('\n');
+}
+// Цветной кружок, ближайший к цвету зоны
+function zoneDot(hex) {
+  const n = parseInt(String(hex || '#888888').slice(1), 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  const dots = [['🟢', 46, 158, 91], ['🟡', 224, 177, 46], ['🟠', 228, 119, 46], ['🔴', 220, 60, 50], ['🔵', 40, 110, 200], ['🟣', 122, 79, 181]];
+  return dots.reduce((best, d) => { const dist = (d[1] - r) ** 2 + (d[2] - g) ** 2 + (d[3] - b) ** 2; return dist < best[1] ? [d[0], dist] : best; }, ['⚪', Infinity])[0];
+}
+
 function deliveryView() {
   const s = catalog.get().settings;
+  const map = config.publicUrl && (catalog.get().zones || []).length ? [[{ text: '🗺 Карта зон доставки', app: 'delivery' }]] : [];
   return {
-    text: `<b>🚚 Доставка и оплата</b>\n\n${esc(s.delivery || 'Доставляем по Сочи.')}\n\n⚖️ <b>Честный вес.</b> Рыбу взвешиваем при сборке, итог по весу менеджер подтвердит до отправки.\n❄️ Свежая рыба и сухая заморозка, везём в холоде.\n💳 ${esc(s.payment || 'Оплата при получении.')}\n\n🕒 ${esc(s.hours || '')}`,
-    buttons: [[{ text: '🐟 Каталог', cb: 'cats' }, { text: '📞 Менеджер', cb: 'ct' }]],
+    text: `<b>🚚 Доставка и оплата</b>\n\n${esc(s.delivery || 'Доставляем по Сочи.')}${zonesText()}\n\n⚖️ <b>Честный вес.</b> Рыбу взвешиваем при сборке, итог по весу менеджер подтвердит до отправки.\n❄️ Свежая рыба и сухая заморозка, везём в холоде.\n💳 ${esc(s.payment || 'Оплата при получении.')}\n\n🕒 ${esc(s.hours || '')}`,
+    buttons: [...map, [{ text: '🐟 Каталог', cb: 'cats' }, { text: '📞 Менеджер', cb: 'ct' }]],
   };
 }
 
@@ -239,8 +253,12 @@ function checkoutView(u) {
       const avail = u._loyal ? loyalty.maxSpend(u._loyal, s.sum) : 0;
       const use = d.useBonus && avail > 0;
       const total = [`<b>Примерно: ${P.rub(s.sum)}</b>`];
-      if (use) total.push(`💎 Бонусами: −${P.rub(avail)}`, `<b>К оплате: ${P.rub(s.sum - avail)}</b>`);
-      else if (avail) total.push(`<i>💎 Можно списать ${avail} бонусов</i>`);
+      const zone = d.geo ? Z.find(catalog.get().zones, d.geo.lat, d.geo.lon) : null;
+      const dl = zone ? Z.cost(zone, s.sum) : null;
+      if (use) total.push(`💎 Бонусами: −${P.rub(avail)}`);
+      if ((catalog.get().zones || []).length) total.push(orders.deliveryText(dl || (d.geo ? { outside: true } : { unknown: true })));
+      if (use || (dl && dl.price)) total.push(`<b>К оплате: ${P.rub(s.sum - (use ? avail : 0) + ((dl && dl.price) || 0))}</b>`);
+      if (!use && avail) total.push(`<i>💎 Можно списать ${avail} бонусов</i>`);
       const rows = [[{ text: '✅ Подтвердить заказ', cb: 'ok' }]];
       if (avail) rows.push([{ text: use ? '↩️ Не списывать бонусы' : `💎 Списать ${avail} бонусов`, cb: 'bu' }]);
       rows.push([{ text: '✎ Изменить данные', cb: 'co' }, { text: '🛒 Корзина', cb: 'cart' }]);
@@ -264,6 +282,17 @@ function startCheckout(u, ev) {
   return checkoutView(u);
 }
 
+// Подсказка о зоне доставки после адреса
+function zoneNote(u) {
+  const zones = catalog.get().zones || [];
+  if (!zones.length) return '';
+  const g = u.draft.geo;
+  if (!g) return '\n🚚 Стоимость доставки подтвердит менеджер.';
+  const z = Z.find(zones, g.lat, g.lon);
+  if (!z) return '\n⚠️ Похоже, адрес вне наших зон доставки — менеджер свяжется и согласует условия.';
+  return `\n🚚 Зона «${esc(z.name)}»: ${esc(Z.tariff(z))}.`;
+}
+
 function nextStep(u) {
   u.step = STEPS[stepNo(u.step)] || 'confirm';
   return checkoutView(u);
@@ -277,11 +306,13 @@ async function handle(ev, rawCtx) {
   u.chatId = String(ev.chatId);
   u.name = ev.user.name; u.username = ev.user.username || '';
   const ctx = wrapCtx(u, rawCtx);
+  const cartBefore = JSON.stringify(u.cart);
   try {
     u._loyal = await loyalty.get(ev.platform, ev.user.id); // баланс нужен экрану подтверждения заказа
     await route(u, ev, ctx);
   } finally {
     delete u._loyal;
+    if (JSON.stringify(u.cart) !== cartBefore) await require('./reminders').touch(u);
     await store.saveUser(u);
   }
 }
@@ -330,8 +361,10 @@ async function route(u, ev, ctx) {
   if (ev.type === 'location') {
     const geo = `Геоточка: https://yandex.ru/maps/?pt=${ev.lon},${ev.lat}&z=17&l=map`;
     if (u.step === 'address') {
-      u.draft.address = geo;
-      await ctx.reply({ text: '📍 Геоточку получили ✓\nЕсли нужно — номер квартиры и подъезд напишите в комментарии на шаге 6.' });
+      u.draft.geo = { lat: ev.lat, lon: ev.lon };
+      const r = await require('./geocode').reverse(ev.lat, ev.lon).catch(() => null);
+      u.draft.address = r && r.label ? `${r.label} (${geo})` : geo;
+      await ctx.reply({ text: `📍 Геоточку получили ✓${zoneNote(u)}\nНомер квартиры и подъезд напишите в комментарии на шаге 6.` });
       return ctx.reply(nextStep(u));
     }
     return ctx.reply({ text: 'Геоточку получили. Чтобы оформить доставку, соберите корзину 🐟', buttons: [[{ text: '🐟 Каталог', cb: 'cats' }]] });
@@ -348,6 +381,7 @@ async function onText(u, ev, ctx) {
   if (u.replyMap && u.replyMap[t]) { const cb = u.replyMap[t]; u.replyMap = null; return onCallback(u, { ...ev, data: cb }, { ...ctx, edit: ctx.reply }); }
   if (/^\/(start|menu|меню)$/i.test(t)) { u.step = null; return ctx.reply(menuView(u, t.toLowerCase() === '/start')); }
   if (/^\/cart$/i.test(t)) return ctx.reply(cartView(u));
+  if (/^\/(delivery|доставка)$/i.test(t)) return ctx.reply(deliveryView());
   if (/^\/(account|bonus|кабинет)$/i.test(t)) return ctx.reply(await accountView(u));
   if (/^\/(catalog|каталог)$/i.test(t)) return ctx.reply(catsView(u));
 
@@ -361,7 +395,9 @@ async function onText(u, ev, ctx) {
     case 'address':
       if (t.length < 5) return ctx.reply({ text: 'Напишите адрес подробнее: улица, дом, квартира.' });
       u.draft.address = t.slice(0, 300);
-      await ctx.reply({ text: `📍 Адрес: ${esc(u.draft.address)} ✓` });
+      u.draft.geo = null;
+      if ((catalog.get().zones || []).length) { const r = await require('./geocode').search(t).catch(() => null); if (r) u.draft.geo = { lat: r.lat, lon: r.lon }; }
+      await ctx.reply({ text: `📍 Адрес: ${esc(u.draft.address)} ✓${zoneNote(u)}` });
       return ctx.reply(nextStep(u));
     case 'comment': u.draft.comment = t.slice(0, 500); return ctx.reply(nextStep(u));
     case 'time': u.draft.time = t.slice(0, 80); return ctx.reply(nextStep(u));
@@ -433,7 +469,7 @@ async function onCallback(u, ev, ctx) {
     case 'ok': {
       if (u.step !== 'confirm') return ctx.toast('Заказ уже оформлен');
       const d = u.draft;
-      const r = await orders.create({ user: u, platform: u.platform, userId: u.userId, chatId: u.chatId, username: u.username, source: 'chat', verified: true, cart: u.cart, name: d.name, phone: d.phone, address: d.address, time: d.time, pay: d.pay, comment: d.comment, useBonus: !!d.useBonus });
+      const r = await orders.create({ user: u, platform: u.platform, userId: u.userId, chatId: u.chatId, username: u.username, source: 'chat', verified: true, cart: u.cart, name: d.name, phone: d.phone, address: d.address, time: d.time, pay: d.pay, comment: d.comment, useBonus: !!d.useBonus, geo: d.geo });
       if (!r.ok) return ctx.reply({ text: '⚠️ ' + r.errors.join('\n'), buttons: [[{ text: '🛒 Корзина', cb: 'cart' }]] });
       u.step = null; u.draft = {};
       return ctx.edit({ text: orders.customerText(r.order), buttons: [[{ text: '🐟 В каталог', cb: 'cats' }, { text: '📞 Менеджер', cb: 'ct' }]] });

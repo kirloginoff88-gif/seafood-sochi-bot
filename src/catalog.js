@@ -25,7 +25,7 @@ const absUrl = src => (!src ? '' : /^https?:\/\//.test(src) ? src : config.publi
 const readSeed = () => JSON.parse(JSON.stringify(SEED));
 
 function build() {
-  raw.cats ||= []; raw.products ||= []; raw.settings ||= {}; raw.promos ||= [];
+  raw.cats ||= []; raw.products ||= []; raw.settings ||= {}; raw.promos ||= []; raw.zones ||= [];
   const cats = [...raw.cats].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0));
   const order = Object.fromEntries(cats.map((c, i) => [c.cid, i]));
   const products = raw.products
@@ -35,6 +35,7 @@ function build() {
     cats: cats.map(c => ({ ...c, count: products.filter(p => p.cid === c.cid && !p.out).length, total: products.filter(p => p.cid === c.cid).length, banner: absUrl(c.image) })),
     products,
     settings: { min_order: '0', ...raw.settings },
+    zones: [...raw.zones].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0)),
     promos: [...raw.promos].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0)).map(x => ({ ...x, imageAbs: absUrl(x.image) })),
     byId: Object.fromEntries(products.map(p => [p.id, p])),
   };
@@ -54,6 +55,7 @@ async function sync() {
   }
   raw = doc;
   if (!raw.promos) raw.promos = readSeed().promos || []; // старый каталог без акций — берём стартовые
+  if (!raw.zones) raw.zones = readSeed().zones || [];   // и стартовые зоны доставки
   ver = v === null ? await db.get('catalog:ver') : v;
   return build();
 }
@@ -220,8 +222,10 @@ async function moveCategory(cid, dir) {
 }
 
 const SETTINGS = { brand: 60, phone_tel: 40, phone_wa: 20, hours: 80, delivery: 400, payment: 200, price_date: 30, min_order: 10,
-  bonus_enabled: 1, bonus_cashback: 4, bonus_max_pay: 4, bonus_welcome: 7, bonus_referrer: 7 };
-const BONUS_LIMITS = { bonus_cashback: 50, bonus_max_pay: 100, bonus_welcome: 100000, bonus_referrer: 100000 };
+  bonus_enabled: 1, bonus_cashback: 4, bonus_max_pay: 4, bonus_welcome: 7, bonus_referrer: 7,
+  welcome_text: 1000, welcome_image: 500, bot_description: 512, bot_short: 120,
+  remind_enabled: 1, remind_hours: 3, remind_text: 500, zone_strict: 1 };
+const BONUS_LIMITS = { bonus_cashback: 50, bonus_max_pay: 100, bonus_welcome: 100000, bonus_referrer: 100000, remind_hours: 72 };
 async function saveSettings(input) {
   await sync();
   for (const [k, max] of Object.entries(SETTINGS)) if (input[k] !== undefined) raw.settings[k] = str(input[k], max);
@@ -229,6 +233,8 @@ async function saveSettings(input) {
   if (raw.settings.bonus_enabled !== undefined) raw.settings.bonus_enabled = raw.settings.bonus_enabled === '0' ? '0' : '1';
   for (const [k, max] of Object.entries(BONUS_LIMITS)) if (raw.settings[k] !== undefined && raw.settings[k] !== '') raw.settings[k] = String(int(raw.settings[k], 0, max));
   raw.settings.phone_wa = raw.settings.phone_wa.replace(/\D/g, '');
+  for (const k of ['remind_enabled', 'zone_strict']) if (raw.settings[k] !== undefined) raw.settings[k] = raw.settings[k] === '1' ? '1' : '0';
+  if (raw.settings.welcome_image && !isImage(raw.settings.welcome_image)) fail('Некорректная картинка приветствия');
   if (!raw.settings.brand) fail('Укажите название магазина');
   await commit();
   return state.settings;
@@ -291,6 +297,46 @@ function livePromos(now) {
   return get().promos.filter(x => x.active && (!x.from || x.from <= t) && (!x.to || x.to >= t));
 }
 
+// ---------- зоны доставки ----------
+async function saveZone(input) {
+  await sync();
+  const old = input.id ? raw.zones.find(x => x.id === input.id) : null;
+  if (input.id && !old) fail('Зона не найдена — возможно, её уже удалили');
+  const poly = Array.isArray(input.polygon) ? input.polygon.slice(0, 400).map(p => [Math.round(+p[0] * 1e5) / 1e5, Math.round(+p[1] * 1e5) / 1e5]) : [];
+  const z = {
+    id: old ? old.id : 'z' + crypto.randomBytes(4).toString('hex'),
+    name: str(input.name, 60),
+    color: /^#[0-9a-f]{6}$/i.test(input.color || '') ? input.color : '#2E9E5B',
+    price: int(input.price, 0, 100_000),
+    free_from: int(input.free_from, 0, 10_000_000),
+    min_order: int(input.min_order, 0, 10_000_000),
+    eta: str(input.eta, 60),
+    polygon: poly,
+    active: input.active === undefined ? 1 : input.active ? 1 : 0,
+    sort: old ? old.sort : raw.zones.reduce((m, y) => Math.max(m, y.sort ?? 0), -1) + 1,
+  };
+  if (!z.name) fail('Укажите название зоны');
+  if (poly.length < 3) fail('Нарисуйте зону на карте: минимум 3 точки');
+  if (poly.some(p => !(p[0] > 40 && p[0] < 48 && p[1] > 35 && p[1] < 45))) fail('Зона должна быть в районе Сочи');
+  if (old) Object.assign(old, z); else raw.zones.push(z);
+  await commit();
+  return state.zones.find(y => y.id === z.id);
+}
+async function deleteZone(id) {
+  await sync();
+  const i = raw.zones.findIndex(x => x.id === id);
+  if (i < 0) fail('Зона не найдена');
+  raw.zones.splice(i, 1);
+  await commit();
+}
+async function moveZone(id, dir) {
+  await sync();
+  const z = raw.zones.find(y => y.id === id);
+  if (!z) fail('Зона не найдена');
+  move(raw.zones, z, dir);
+  await commit();
+}
+
 async function setImage(kind, id, src) {
   await sync();
   const item = kind === 'cat' ? raw.cats.find(c => c.cid === id) : raw.products.find(p => p.id === +id);
@@ -327,6 +373,6 @@ module.exports = {
   get, sync, search, fullName, sales, thumbOf,
   saveProduct, quickProduct, deleteProduct, moveProduct,
   saveCategory, deleteCategory, moveCategory, saveSettings, setImage, InputError,
-  savePromo, deletePromo, movePromo, livePromos,
+  savePromo, deletePromo, movePromo, livePromos, saveZone, deleteZone, moveZone,
   _raw: async () => (await sync(), raw),
 };

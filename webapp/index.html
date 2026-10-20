@@ -93,6 +93,33 @@ img{display:block;max-width:100%}
 .bonusband b{display:block;font-size:14.5px;font-weight:800}
 .bonusband small{display:block;font-size:12px;opacity:.8}
 .bonusband .ar{margin-left:auto;font-size:20px;opacity:.7}
+.bonusband.dl{background:var(--card);color:var(--ink);box-shadow:var(--shadow);margin-top:10px}
+.bonusband.dl small{color:var(--muted);opacity:1}
+/* доставка и карта */
+.map{height:340px;border-radius:18px;overflow:hidden;background:var(--soft);box-shadow:var(--shadow);z-index:0}
+.leaflet-container{font-family:var(--font)}
+.zlist{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.zl{display:flex;gap:11px;align-items:flex-start;background:var(--card);border-radius:14px;padding:11px 13px;box-shadow:var(--shadow)}
+.zl i{flex:0 0 14px;height:14px;border-radius:4px;margin-top:3px}
+.zl b{display:block;color:var(--ink);font-size:14px}
+.zl small{display:block;color:var(--muted);font-size:12.5px}
+.chk{display:flex;gap:8px;margin-bottom:10px}
+.chk input{flex:1;min-width:0;background:var(--card);border:1px solid var(--line);border-radius:13px;padding:11px 12px;font-size:15px;color:var(--ink);outline:0}
+.chk button{flex:0 0 auto}
+.zres{border-radius:14px;padding:11px 13px;margin-bottom:10px;font-size:13.5px;font-weight:600;background:var(--sea-soft);color:var(--ink)}
+.zres.bad{background:var(--coral-soft);color:var(--coral2)}
+.zchip{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;color:var(--body);margin-top:2px;flex-wrap:wrap}
+.zchip i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.zchip .pick{color:var(--sea);font-weight:800;margin-left:auto;padding:4px 0}
+.zchip.bad{color:var(--coral2)}
+.mapsheet{position:fixed;inset:0;z-index:46;background:var(--bg);display:flex;flex-direction:column}
+.mapsheet .mh{display:flex;align-items:center;gap:10px;padding:12px 14px}
+.mapsheet .mh b{flex:1;font-size:16px;color:var(--ink)}
+.mapsheet .mh button{font-size:22px;width:36px;height:36px}
+.mapsheet #pmap{flex:1;z-index:0}
+.mapsheet .mf{padding:12px 14px calc(12px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:8px;background:var(--card);border-top:1px solid var(--line)}
+.mapsheet .mf small{color:var(--muted);font-size:12.5px}
+.pin{width:22px!important;height:22px!important;margin:-22px 0 0 -11px!important;border-radius:50% 50% 50% 0;background:var(--coral);transform:rotate(-45deg);border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35)}
 
 /* товары */
 .sec{padding:22px 0 0;scroll-margin-top:128px}
@@ -295,6 +322,7 @@ img{display:block;max-width:100%}
   <section id="formView" class="view" hidden></section>
   <section id="doneView" class="view" hidden></section>
   <section id="accountView" class="view" hidden></section>
+  <section id="deliveryView" class="view" hidden></section>
 </div>
 
 <div class="bar" id="bar" hidden><button id="barBtn" type="button"><div><small id="barCnt"></small><b id="barSum"></b></div><span class="go" id="barGo">Корзина →</span></button></div>
@@ -309,6 +337,7 @@ img{display:block;max-width:100%}
 <div class="toast" id="toast" hidden></div>
 
 <script src="pricing.js"></script>
+<script src="../static/zones.js"></script>
 <script>
 (function(){
 'use strict';
@@ -320,7 +349,7 @@ var WA = null;              // объект мессенджера (Telegram.Web
 var INIT = '';              // подписанная строка initData
 var DATA = null, BY = {};   // каталог
 var cart = {}, profile = {}, ACC = null;
-var screen = 'shop', query = '', form = { time:'', pay:'', useBonus:false };
+var screen = 'shop', query = '', form = { time:'', pay:'', useBonus:false, geo:null };
 var BASE = location.pathname.replace(/app\/[^/]*$/, ''); // корень сервера (учитывает подпуть)
 var COLORS = ['#0E7C86','#E4572E','#1F3A5F','#7A4FB5','#C99A2E','#2E8B57'];
 var DECO = { account:'🎁', sale:'🔥', product:'🦐', category:'🐟', url:'✨', none:'🌊' };
@@ -448,6 +477,10 @@ function renderShop(){
       html+='<button class="bonusband" data-go="account"><span class="ic">💎</span><div><b>'+(ACC?'У вас '+ACC.bonus.balance+' '+P.plural(ACC.bonus.balance,'бонус','бонуса','бонусов'):'Бонусы за каждый заказ')+'</b><small>'+
         (DATA.bonus.cashback?'Кешбэк '+DATA.bonus.cashback+'% · ':'')+(DATA.bonus.referrer?'+'+DATA.bonus.referrer+' за друга':'оплата до '+DATA.bonus.maxPay+'% заказа')+'</small></div><span class="ar">›</span></button>';
     }
+    if(DATA.zones && DATA.zones.length){
+      var minFree=DATA.zones.reduce(function(m,z){ return +z.free_from>0 ? Math.min(m,+z.free_from) : m; }, Infinity);
+      html+='<button class="bonusband dl" data-go="delivery"><span class="ic">🚚</span><div><b>Доставка по зонам</b><small>'+(isFinite(minFree)?'Бесплатно от '+P.rub(minFree)+' · ':'')+'проверьте свой адрес на карте</small></div><span class="ar">›</span></button>';
+    }
     if(sales.length) html+='<section class="blk hot"><h2>🔥 Скидки недели <button data-tab="sale">Все</button></h2><div class="hscroll">'+sales.map(cardHtml).join('')+'</div></section>';
   }
   var any=false;
@@ -512,11 +545,11 @@ function renderBar(){
   var t=totals(), n=t.lines.length, min=DATA.settings.min_order||0;
   var bar=$('bar'), btn=$('barBtn'), cnt=$('tabCnt');
   cnt.hidden=!n; cnt.textContent=n;
-  if(screen==='done' || screen==='account' || screen==='sale' && !n || (!n && screen==='shop') || (!n && screen==='cart')){ bar.hidden=true; return; }
+  if(screen==='done' || screen==='account' || (screen==='sale'||screen==='delivery') && !n || (!n && screen==='shop') || (!n && screen==='cart')){ bar.hidden=true; return; }
   bar.hidden=false;
-  if(screen==='shop'||screen==='sale'){ $('barCnt').textContent=n+' '+P.plural(n,'позиция','позиции','позиций'); $('barSum').textContent=(t.weighed?'≈ ':'')+P.rub(t.sum); $('barGo').textContent='Корзина →'; btn.disabled=false; }
+  if(screen==='shop'||screen==='sale'||screen==='delivery'){ $('barCnt').textContent=n+' '+P.plural(n,'позиция','позиции','позиций'); $('barSum').textContent=(t.weighed?'≈ ':'')+P.rub(t.sum); $('barGo').textContent='Корзина →'; btn.disabled=false; }
   if(screen==='cart'){ $('barCnt').textContent=min&&t.sum<min?'Минимум '+P.rub(min):'Итого примерно'; $('barSum').textContent=P.rub(t.sum); $('barGo').textContent='Оформить →'; btn.disabled=!n||(min&&t.sum<min); }
-  if(screen==='form'){ var b=form.useBonus?bonusAvail(t.sum):0; $('barCnt').textContent=b?'К оплате с бонусами':'К оплате примерно'; $('barSum').textContent=P.rub(t.sum-b); $('barGo').textContent='Отправить заказ'; btn.disabled=false; }
+  if(screen==='form'){ var b=form.useBonus?bonusAvail(t.sum):0, dd=hasZones()?dlInfo(form.geo,t.sum):null; $('barCnt').textContent=b?'К оплате с бонусами':'К оплате примерно'; $('barSum').textContent=P.rub(t.sum-b+((dd&&dd.price)||0)); $('barGo').textContent='Отправить заказ'; btn.disabled=false; }
 }
 function thumbOf(p){ return p.thumb ? '<div class="th"><img src="'+esc(p.thumb)+'" alt="" data-full="'+esc(p.image)+'" data-emoji="'+emojiOf(p)+'"></div>' : '<div class="th">'+emojiOf(p)+'</div>'; }
 function renderCart(){
@@ -549,21 +582,147 @@ function renderForm(){
     (b?'<button type="button" class="toggle'+(form.useBonus?' on':'')+'" id="bonusTg"><span class="ic">💎</span><div><b>Списать '+b+' '+P.plural(b,'бонус','бонуса','бонусов')+'</b><small>Скидка '+P.rub(b)+' · на счёте '+ACC.bonus.balance+'</small></div><span class="sw"></span></button>':'')+
     field('name','Имя','text','Как к вам обращаться','name')+
     field('phone','Телефон','tel','+7 900 000-00-00','tel')+
-    '<div class="f"><label for="f-address">Адрес доставки</label><textarea id="f-address" placeholder="Улица, дом, квартира, подъезд">'+esc(form.address)+'</textarea><span class="err" id="e-address"></span></div>'+
+    '<div class="f"><label for="f-address">Адрес доставки</label><textarea id="f-address" placeholder="Улица, дом, квартира, подъезд">'+esc(form.address)+'</textarea><span class="err" id="e-address"></span>'+
+    (hasZones()?'<div class="zchip" id="zoneBox"></div>':'')+'</div>'+
     '<div class="f"><label>Когда доставить</label><div class="chips">'+s.timeSlots.map(function(t){return '<button type="button" class="chip'+(t===form.time?' on':'')+'" data-time="'+esc(t)+'">'+esc(t)+'</button>';}).join('')+'</div></div>'+
     '<div class="f"><label>Оплата при получении</label><div class="chips">'+s.payments.map(function(t){return '<button type="button" class="chip'+(t===form.pay?' on':'')+'" data-pay="'+esc(t)+'">'+esc(t)+'</button>';}).join('')+'</div></div>'+
     '<div class="f"><label for="f-comment">Комментарий</label><textarea id="f-comment" placeholder="Например: разделать форель на стейки">'+esc(form.comment||'')+'</textarea></div>'+
     '<div class="card" style="padding:10px 14px" id="sumBox"></div>'+
     '<p class="muted">'+esc(s.settings.delivery||'')+' Менеджер позвонит, подтвердит вес и итог до отправки.</p>'+
     '<div class="warn" id="formErr" hidden></div>';
-  ['name','phone','address','comment'].forEach(function(k){ var el=$('f-'+k); el.addEventListener('input',function(){ form[k]=el.value; var e=$('e-'+k); if(e) e.textContent=''; }); });
-  renderSum(); renderBar();
+  ['name','phone','address','comment'].forEach(function(k){ var el=$('f-'+k); el.addEventListener('input',function(){ form[k]=el.value; var e=$('e-'+k); if(e) e.textContent=''; if(k==='address') addressChanged(); }); });
+  if(hasZones() && !form.geo){ var saved=store('geo_'+PLATFORM); if(saved && saved.address===form.address) form.geo=saved.geo; else if(form.address) addressChanged(true); }
+  renderZoneBox(); renderSum(); renderBar();
 }
 function renderSum(){
-  var t=totals(), b=form.useBonus?bonusAvail(t.sum):0;
+  var t=totals(), b=form.useBonus?bonusAvail(t.sum):0, d=hasZones()?dlInfo(form.geo,t.sum):null;
+  var dline='';
+  if(hasZones()){
+    if(d && d.name) dline='<div class="tot"><b>Доставка · '+esc(d.name)+'</b><strong>'+(d.price?P.rub(d.price):'бесплатно')+'</strong></div>'+(d.price&&d.freeFrom&&t.sum<d.freeFrom?'<p class="muted" style="margin:0 2px 4px">Добавьте товаров на '+P.rub(d.freeFrom-t.sum)+' — доставка будет бесплатной</p>':'');
+    else dline='<div class="tot"><b>Доставка</b><strong style="font-size:13px;color:var(--muted)">'+(d&&d.outside?'вне зон':'уточнит менеджер')+'</strong></div>';
+  }
   $('sumBox').innerHTML='<div class="tot"><b>Товары ('+t.lines.length+')</b><strong>'+(t.weighed?'≈ ':'')+P.rub(t.sum)+'</strong></div>'+
-    (b?'<div class="tot bon"><b>Бонусами</b><strong>−'+P.rub(b)+'</strong></div>':'')+
-    '<div class="tot big"><b>К оплате</b><strong>'+P.rub(t.sum-b)+'</strong></div>';
+    (b?'<div class="tot bon"><b>Бонусами</b><strong>−'+P.rub(b)+'</strong></div>':'')+dline+
+    '<div class="tot big"><b>К оплате</b><strong>'+P.rub(t.sum-b+((d&&d.price)||0))+'</strong></div>';
+}
+
+/* ---------- зоны доставки и карта ---------- */
+function hasZones(){ return DATA && DATA.zones && DATA.zones.length>0; }
+function zoneAt(g){ return g && window.Zones ? Zones.find(DATA.zones,g.lat,g.lon) : null; }
+function dlInfo(g,sum){ var z=zoneAt(g); return z ? Zones.cost(z,sum) : (g ? {outside:true} : null); }
+function zoneHtml(g){
+  var z=zoneAt(g);
+  if(!g) return '<span>🚚 Стоимость доставки посчитаем по адресу</span>';
+  if(!z) return '<span class="bad">⚠️ Адрес вне зон доставки'+(DATA.zoneStrict?' — выберите другой адрес':' — менеджер согласует условия')+'</span>';
+  return '<i style="background:'+esc(z.color)+'"></i><span>'+esc(z.name)+': '+esc(Zones.tariff(z))+'</span>';
+}
+function renderZoneBox(){
+  var el=$('zoneBox'); if(!el) return;
+  var z=zoneAt(form.geo);
+  el.className='zchip'+(form.geo&&!z?' bad':'');
+  el.innerHTML=(geoBusy?'<span>Ищем адрес на карте…</span>':zoneHtml(form.geo))+'<button type="button" class="pick" data-pick>🗺 '+(form.geo?'Уточнить на карте':'Указать на карте')+'</button>';
+}
+var geoT=null, geoBusy=false;
+function addressChanged(now){
+  form.geo=null; clearTimeout(geoT);
+  var q=String(form.address||'').trim();
+  if(q.length<6){ renderZoneBox(); renderSum(); renderBar(); return; }
+  geoT=setTimeout(function(){
+    geoBusy=true; renderZoneBox();
+    fetch(BASE+'api/geocode?q='+encodeURIComponent(q)).then(function(r){return r.json();}).then(function(r){
+      geoBusy=false;
+      if(r.ok && String(form.address||'').trim()===q){ form.geo={lat:r.lat,lon:r.lon}; store('geo_'+PLATFORM,{address:form.address,geo:form.geo}); }
+      renderZoneBox(); renderSum(); renderBar();
+    }).catch(function(){ geoBusy=false; renderZoneBox(); });
+  }, now?50:1200);
+}
+var LEAF=null;
+function loadLeaflet(){
+  if(window.L) return Promise.resolve();
+  if(LEAF) return LEAF;
+  LEAF=new Promise(function(res,rej){
+    var l=document.createElement('link'); l.rel='stylesheet'; l.href=BASE+'static/leaflet.css'; document.head.appendChild(l);
+    var sc=document.createElement('script'); sc.src=BASE+'static/leaflet.js'; sc.onload=res; sc.onerror=function(){ LEAF=null; rej(new Error('map')); }; document.head.appendChild(sc);
+  });
+  return LEAF;
+}
+function mkMap(el){
+  var m=L.map(el,{zoomControl:true,tap:true}).setView([43.55,39.85],10);
+  L.tileLayer(BASE+'tiles/{z}/{x}/{y}.png',{maxZoom:18,minZoom:8,attribution:'© OpenStreetMap © CARTO'}).addTo(m);
+  var all=[];
+  DATA.zones.forEach(function(z){ var p=L.polygon(z.polygon,{color:z.color,weight:2,fillOpacity:.25}).addTo(m).bindTooltip(esc(z.name)); all.push(p); });
+  var fit=function(){ m.invalidateSize(); if(all.length) m.fitBounds(L.featureGroup(all).getBounds(),{padding:[16,16]}); };
+  fit(); setTimeout(fit,80); // размер контейнера известен только после отрисовки
+  return m;
+}
+function pinIcon(){ return L.divIcon({className:'pin',iconSize:[22,22]}); }
+
+// Экран «Доставка»: карта зон, тарифы, проверка адреса
+var DMAP=null, DPIN=null;
+function renderDelivery(){
+  var v=$('deliveryView'), s=DATA.settings;
+  v.innerHTML='<h1>Доставка</h1>'+
+    (hasZones()?'<div class="chk"><input id="dq" type="search" placeholder="Улица и дом — проверим зону" autocomplete="street-address"><button class="btn" data-dfind>Найти</button></div>'+
+    '<div id="dres" hidden></div><div class="map" id="dmap"></div>'+
+    '<p class="muted">Нажмите на карту, чтобы проверить любую точку.'+(navigator.geolocation?' <button class="link" data-dme style="padding:0">📍 Где я?</button>':'')+'</p>'+
+    '<h2>Зоны и тарифы</h2><div class="zlist">'+DATA.zones.map(function(z){ return '<div class="zl"><i style="background:'+esc(z.color)+'"></i><div><b>'+esc(z.name)+'</b><small>'+esc(Zones.tariff(z))+(z.eta?' · '+esc(z.eta):'')+'</small></div></div>'; }).join('')+'</div>'+
+    (DATA.zoneStrict?'<p class="muted">Вне цветных зон пока не доставляем.</p>':'<p class="muted">Живёте за пределами зон? Оформите заказ — менеджер согласует доставку.</p>'):'')+
+    '<h2>Условия</h2><div class="card" style="padding:12px 14px;font-size:14px">'+esc(s.delivery||'Доставляем по Сочи.')+'<p class="muted" style="margin:8px 0 0">💳 '+esc(s.payment||'')+'</p></div>'+contactsHtml(s);
+  DMAP=null; DPIN=null;
+  if(!hasZones()) return;
+  loadLeaflet().then(function(){ if(screen!=='delivery') return; DMAP=mkMap($('dmap')); DMAP.on('click',function(e){ checkPoint({lat:e.latlng.lat,lon:e.latlng.lng},true); }); })
+    .catch(function(){ $('dmap').innerHTML='<div class="empty">Карта не загрузилась — проверьте интернет</div>'; });
+}
+function checkPoint(g, reverse, label){
+  if(DMAP){ if(DPIN) DPIN.setLatLng([g.lat,g.lon]); else DPIN=L.marker([g.lat,g.lon],{icon:pinIcon()}).addTo(DMAP); DMAP.setView([g.lat,g.lon],Math.max(DMAP.getZoom(),13)); }
+  var z=zoneAt(g), el=$('dres'); el.hidden=false;
+  el.className='zres'+(z?'':' bad');
+  el.innerHTML=(label?'<div style="font-weight:800;margin-bottom:3px">'+esc(label)+'</div>':'')+(z?'<i style="display:inline-block;width:10px;height:10px;border-radius:3px;background:'+esc(z.color)+'"></i> '+esc(z.name)+' — '+esc(Zones.tariff(z))+(z.eta?' · '+esc(z.eta):''):'Эта точка вне зон доставки'+(DATA.zoneStrict?'':' — менеджер согласует условия'));
+  if(reverse) fetch(BASE+'api/geocode?lat='+g.lat+'&lon='+g.lon).then(function(r){return r.json();}).then(function(r){ if(r.ok&&r.label) checkPoint(g,false,r.label); }).catch(function(){});
+}
+function findAddress(){
+  var q=$('dq').value.trim(); if(q.length<4) return toast('Введите улицу и дом');
+  fetch(BASE+'api/geocode?q='+encodeURIComponent(q)).then(function(r){return r.json();}).then(function(r){
+    if(!r.ok) return toast('Не нашли такой адрес — отметьте точку на карте');
+    checkPoint({lat:r.lat,lon:r.lon},false,r.label);
+  }).catch(function(){ toast('Нет связи — попробуйте ещё раз'); });
+}
+
+// Выбор точки доставки на карте при оформлении
+var PMAP=null, PPIN=null, PGEO=null, PLABEL='';
+function openPicker(){
+  var el=document.createElement('div'); el.className='mapsheet'; el.id='picker';
+  el.innerHTML='<div class="mh"><b>Точка доставки</b><button data-pclose aria-label="Закрыть">×</button></div><div id="pmap"></div>'+
+    '<div class="mf"><div id="pinfo"><small>Нажмите на карту там, куда привезти заказ</small></div><button class="btn w" data-pok disabled>Готово</button></div>';
+  document.body.appendChild(el); showBack(true);
+  PGEO=form.geo; PLABEL='';
+  loadLeaflet().then(function(){
+    PMAP=mkMap($('pmap')); PPIN=null;
+    if(PGEO){ PPIN=L.marker([PGEO.lat,PGEO.lon],{icon:pinIcon()}).addTo(PMAP); PMAP.setView([PGEO.lat,PGEO.lon],15); pickInfo(); }
+    else if(navigator.geolocation) navigator.geolocation.getCurrentPosition(function(p){ if(PMAP && !PGEO) PMAP.setView([p.coords.latitude,p.coords.longitude],15); },function(){}, {timeout:5000});
+    PMAP.on('click',function(e){
+      PGEO={lat:+e.latlng.lat.toFixed(6),lon:+e.latlng.lng.toFixed(6)}; PLABEL='';
+      if(PPIN) PPIN.setLatLng(e.latlng); else PPIN=L.marker(e.latlng,{icon:pinIcon()}).addTo(PMAP);
+      pickInfo(); haptic();
+      fetch(BASE+'api/geocode?lat='+PGEO.lat+'&lon='+PGEO.lon).then(function(r){return r.json();}).then(function(r){ if(r.ok&&r.label){ PLABEL=r.label; pickInfo(); } }).catch(function(){});
+    });
+  }).catch(function(){ $('pmap').innerHTML='<div class="empty">Карта не загрузилась — проверьте интернет</div>'; });
+}
+function pickInfo(){
+  var z=zoneAt(PGEO);
+  $('pinfo').innerHTML=(PLABEL?'<b style="color:var(--ink)">'+esc(PLABEL)+'</b><br>':'')+'<span class="zchip'+(z?'':' bad')+'" style="margin:0">'+zoneHtml(PGEO)+'</span>';
+  document.querySelector('[data-pok]').disabled=!PGEO;
+}
+function closePicker(ok){
+  var el=$('picker'); if(!el) return;
+  if(ok && PGEO){
+    form.geo=PGEO;
+    if(PLABEL && (!String(form.address||'').trim() || form.address.length<6)){ form.address=PLABEL+', кв. '; var a=$('f-address'); if(a){ a.value=form.address; a.focus(); } }
+    store('geo_'+PLATFORM,{address:form.address,geo:form.geo});
+    renderZoneBox(); renderSum(); renderBar();
+  }
+  if(PMAP){ PMAP.remove(); PMAP=null; }
+  el.remove(); showBack(true);
 }
 function field(k,label,type,ph,ac){
   return '<div class="f"><label for="f-'+k+'">'+label+'</label><input id="f-'+k+'" type="'+type+'" autocomplete="'+ac+'" placeholder="'+ph+'" value="'+esc(form[k]||'')+'"><span class="err" id="e-'+k+'"></span></div>';
@@ -575,17 +734,20 @@ function submit(){
   if(!String(form.name||'').trim()){ $('e-name').textContent='Укажите имя'; bad=true; }
   if(String(form.phone||'').replace(/\D/g,'').length<10){ $('e-phone').textContent='Нужно 10–11 цифр'; bad=true; }
   if(String(form.address||'').trim().length<5){ $('e-address').textContent='Укажите адрес'; bad=true; }
+  if(!bad && hasZones() && DATA.zoneStrict && form.geo && !zoneAt(form.geo)){ $('e-address').textContent='Этот адрес вне зон доставки'; bad=true; }
   if(bad){ haptic('error'); return; }
   sending=true; $('barBtn').disabled=true; $('barGo').textContent='Отправляем…';
   var sum=totals().sum;
-  api('POST','api/order',{ cart:cart, order:{ name:form.name, phone:form.phone, address:form.address, time:form.time, pay:form.pay, comment:form.comment||'', useBonus:!!form.useBonus } })
+  api('POST','api/order',{ cart:cart, order:{ name:form.name, phone:form.phone, address:form.address, time:form.time, pay:form.pay, comment:form.comment||'', useBonus:!!form.useBonus, geo:form.geo||null } })
     .then(function(r){
       sending=false;
       if(!r.ok){ var e=$('formErr'); e.innerHTML=(r.errors||['Не удалось отправить заказ']).map(esc).join('<br>'); e.hidden=false; renderBar(); return; }
       cart={}; store('cart_'+PLATFORM,{}); profile={name:form.name,phone:form.phone,address:form.address}; form.useBonus=false;
       var earn = ACC && ACC.bonus.enabled && ACC.bonus.cashback ? Math.floor((sum-(r.bonusUsed||0))*ACC.bonus.cashback/100) : 0;
       $('doneView').innerHTML='<div class="done"><div class="big">✅</div><h1>Заказ №'+r.id+' принят</h1><p>Менеджер позвонит в течение 15 минут, уточнит вес и итоговую сумму.'+(PLATFORM!=='web'?' Статус заказа придёт в чат с ботом.':'')+'</p>'+
-        (r.bonusUsed?'<p style="color:var(--sea);font-weight:700">💎 Списано '+r.bonusUsed+' бонусов · к оплате ≈ '+P.rub(r.toPay)+'</p>':'')+
+        (r.bonusUsed?'<p style="color:var(--sea);font-weight:700">💎 Списано '+r.bonusUsed+' бонусов</p>':'')+
+        (r.delivery&&r.delivery.name?'<p style="font-weight:700;color:var(--ink)">🚚 '+esc(r.delivery.name)+': доставка '+(r.delivery.price?P.rub(r.delivery.price):'бесплатно')+'</p>':'')+
+        (r.bonusUsed||(r.delivery&&r.delivery.price)?'<p style="font-weight:700;color:var(--ink)">К оплате ≈ '+P.rub(r.toPay)+'</p>':'')+
         (earn?'<div class="earn">+'+earn+' бонусов придут после доставки</div><br>':'')+
         (WA&&WA.close?'<button class="btn" data-closeapp>Вернуться в чат</button> ':'')+'<button class="btn alt" data-go="shop">В каталог</button></div>';
       go('done'); haptic('success'); refreshAccount();
@@ -686,7 +848,7 @@ function closeCard(){ $('sheet').hidden=true; showBack(screen!=='shop'); }
 
 /* ---------- навигация ---------- */
 function showBack(on){ try{ if(WA&&WA.BackButton){ on?WA.BackButton.show():WA.BackButton.hide(); } }catch(e){} }
-var VIEWS={ shop:'shop', sale:'saleView', cart:'cartView', form:'formView', done:'doneView', account:'accountView' };
+var VIEWS={ shop:'shop', sale:'saleView', cart:'cartView', form:'formView', done:'doneView', account:'accountView', delivery:'deliveryView' };
 function go(s){
   screen=s;
   Object.keys(VIEWS).forEach(function(k){ $(VIEWS[k]).hidden = k!==s; });
@@ -698,10 +860,12 @@ function go(s){
   if(s==='shop') renderShop();
   if(s==='sale') renderSale();
   if(s==='account'){ renderAccount(); refreshAccount(); }
+  if(s==='delivery') renderDelivery();
   showBack(s!=='shop');
   renderBar(); window.scrollTo(0,0);
 }
 function back(){
+  if($('picker')) return closePicker(false);
   if(!$('modal').hidden) return closeModal();
   if(!$('sheet').hidden) return closeCard();
   if(screen==='form') return go('cart');
@@ -723,6 +887,11 @@ document.addEventListener('click',function(e){
   if(d.tab){ haptic(); return go(d.tab); }
   if(d.go) return go(d.go);
   if(d.repeat) return repeatOrder(d.repeat);
+  if(d.pick!==undefined) return openPicker();
+  if(d.pclose!==undefined) return closePicker(false);
+  if(d.pok!==undefined) return closePicker(true);
+  if(d.dfind!==undefined) return findAddress();
+  if(d.dme!==undefined){ return navigator.geolocation.getCurrentPosition(function(p){ checkPoint({lat:p.coords.latitude,lon:p.coords.longitude},true); },function(){ toast('Не удалось определить местоположение'); },{timeout:8000}); }
   if(d.copy) return copy(d.copy);
   if(d.share!==undefined) return share();
   if(d.clear!==undefined){ Object.keys(cart).forEach(function(id){ delete cart[id]; }); saveCart(); return go('shop'); }
@@ -740,10 +909,11 @@ document.addEventListener('error',function(e){
   else { img.parentNode.textContent=img.dataset.emoji||'🐟'; }
 },true);
 $('barBtn').addEventListener('click',function(){
-  if(screen==='shop'||screen==='sale') return go('cart');
+  if(screen==='shop'||screen==='sale'||screen==='delivery') return go('cart');
   if(screen==='cart') return go('form');
   if(screen==='form') return submit();
 });
+document.addEventListener('keydown',function(e){ if(e.key==='Enter' && e.target.id==='dq'){ e.preventDefault(); findAddress(); } });
 var qi=$('q');
 qi.addEventListener('input',function(){ query=qi.value.trim().toLowerCase().replace(/ё/g,'е'); $('qx').hidden=!query; renderShop(); });
 $('qx').addEventListener('click',function(){ qi.value=''; query=''; $('qx').hidden=true; renderShop(); qi.focus(); });

@@ -34,7 +34,7 @@ if (REDIS) redisSrv.listen(REDIS_PORT);
 
 Object.assign(process.env, {
   DATA_DIR: tmp, TG_TOKEN: '123:TEST', MAX_TOKEN: 'max-test-token', MAX_BOT_NAME: 'seafood_sochi_bot',
-  PUBLIC_URL: 'https://bot.example.ru', MANAGER_PIN: '4821', ADMIN_PASSWORD: 'secret-pass', PORT: '0',
+  PUBLIC_URL: 'https://bot.example.ru', GEOCODE: '0', MANAGER_PIN: '4821', ADMIN_PASSWORD: 'secret-pass', PORT: '0',
   ...(REDIS ? { KV_REST_API_URL: `http://127.0.0.1:${REDIS_PORT}`, KV_REST_API_TOKEN: 'test-redis-token' } : {}),
 });
 
@@ -332,7 +332,10 @@ test('вебхуки: чужой секрет отклоняется, свой �
     assert.notEqual(config.telegram.webhookSecret, '', 'секрет выведен из токена');
     const r = await req('POST', '/webhook/tg', upd, { 'X-Telegram-Bot-Api-Secret-Token': config.telegram.webhookSecret });
     assert.equal(r.status, 200);
-    assert.ok(calls.some(c => c.url.endsWith('sendMessage') && /Seafood Сочи/.test(c.body.text)), 'ответ ушёл до того, как вебхук вернул 200');
+    const hello = calls.find(c => c.url.endsWith('sendPhoto'));
+    assert.ok(hello && /Seafood Сочи/.test(hello.body.caption), 'приветствие с баннером ушло до того, как вебхук вернул 200');
+    assert.equal(hello.body.photo, 'https://bot.example.ru/static/welcome.jpg');
+    assert.ok(hello.body.reply_markup.inline_keyboard.length > 2, 'у приветствия есть кнопки меню');
   } finally { srv.close(); hub.register('tg', fake('tg')); global.fetch = realFetch; }
 });
 
@@ -647,4 +650,129 @@ test('акции: стартовые баннеры, даты показа, ад
     r = await req('GET', '/admin/api/customer?key=tg:2001');
     assert.equal(r.body.history[0].amount, 250);
   } finally { srv.close(); }
+});
+
+test('зоны доставки: расчёт стоимости, заказ с точкой, админка, плитки карты', async () => {
+  const Z = require('../src/shared/zones');
+  const orders = require('../src/orders');
+  const zones = catalog.get().zones;
+  assert.ok(zones.length >= 3, 'стартовые зоны есть');
+  const center = { lat: 43.5855, lon: 39.7231 }; // Центр Сочи
+  const zc = Z.find(zones, center.lat, center.lon);
+  assert.equal(zc.id, 'z-center');
+  assert.equal(Z.cost(zc, 2500).price, 300);
+  assert.equal(Z.cost(zc, 3000).price, 0, 'бесплатно от порога');
+  assert.equal(Z.find(zones, 45.03, 38.97), null, 'Краснодар вне зон');
+  assert.match(Z.tariff(zc), /Бесплатно от 3\s000\s₽, иначе 300\s₽/);
+  assert.equal(Z.find(zones, 43.43, 39.935).id, 'z-south', 'Адлер');
+
+  // заказ с точкой: доставка в итоге, менеджер видит ссылку на карту
+  outbox.length = 0;
+  let r = await orders.create({ platform: 'tg', userId: '4001', chatId: '4001', cart: { 41: 1 }, name: 'Ян', phone: '+79180000004', address: 'Навагинская, 1', geo: center });
+  assert.equal(r.order.delivery.name, 'Центр Сочи');
+  assert.equal(r.order.delivery.price, 300);
+  assert.equal(r.order.toPay, 2850 + 300);
+  assert.match(orders.customerText(r.order), /Доставка \(Центр Сочи\): 300 ₽/);
+  assert.ok(outbox.some(m => /yandex\.ru\/maps\/\?pt=39\.7231,43\.5855/.test(m.view.text)));
+  // вне зон — принимаем с пометкой; при строгом режиме — отказ
+  r = await orders.create({ platform: 'tg', userId: '4001', chatId: '4001', cart: { 41: 1 }, name: 'Ян', phone: '+79180000004', address: 'Краснодар', geo: { lat: 45.03, lon: 38.97 } });
+  assert.equal(r.order.delivery.outside, true);
+  // точка из геометки бота распознаётся без поиска адреса
+  const d = await orders.deliveryFor(null, 'Геоточка: https://yandex.ru/maps/?pt=39.7231,43.5855&z=17&l=map', 5000);
+  assert.equal(d.delivery.name, 'Центр Сочи'); assert.equal(d.delivery.price, 0);
+
+  const { srv, req } = await startServer({ vercel: REDIS });
+  try {
+    const cat = await req('GET', '/api/catalog');
+    assert.ok(cat.body.zones.length >= 3 && cat.body.zones[0].polygon.length >= 3, 'зоны с контурами отдаются магазину');
+    assert.match((await req('GET', '/static/zones.js')).body, /tariff/);
+    assert.match((await req('GET', '/static/leaflet.js')).body, /Leaflet/);
+    assert.equal((await req('GET', '/static/../src/config.js')).status, 404);
+    assert.equal((await req('GET', '/tiles/12/2000/2000.png')).status, 404, 'плитки вне Сочи не отдаём');
+    assert.equal(require('../src/tiles').allowed(12, 2500, 1504), true, 'плитка Сочи разрешена');
+
+    await req('POST', '/admin/api/login', { password: 'secret-pass' });
+    assert.equal((await req('POST', '/admin/api/zone/save', { zone: { name: 'Пусто', polygon: [[43.5, 39.7]] } })).status, 422);
+    let a = await req('POST', '/admin/api/zone/save', { zone: { name: 'Сириус', color: '#2F6FCB', price: 0, polygon: [[43.39, 39.93], [43.42, 39.93], [43.42, 39.98], [43.39, 39.98]] } });
+    assert.equal(a.status, 200);
+    const id = a.body.zone.id;
+    assert.equal(a.body.zones.at(-1).id, id);
+    a = await req('POST', '/admin/api/zone/move', { id, dir: -1 });
+    a = await req('POST', '/admin/api/settings/save', { settings: { zone_strict: '1' } });
+    r = await orders.create({ platform: 'tg', userId: '4001', chatId: '4001', cart: { 41: 1 }, name: 'Ян', phone: '+79180000004', address: 'Краснодар', geo: { lat: 45.03, lon: 38.97 } });
+    assert.equal(r.ok, false); assert.match(r.errors[0], /вне зоны доставки/);
+    await req('POST', '/admin/api/settings/save', { settings: { zone_strict: '0' } });
+    a = await req('POST', '/admin/api/zone/delete', { id });
+    assert.ok(!a.body.zones.some(z => z.id === id));
+  } finally { srv.close(); }
+});
+
+test('напоминание о брошенной корзине: через N часов, второе через сутки, не ночью, не после заказа', async () => {
+  const reminders = require('../src/reminders');
+  await db.del('carts');
+  let c = await say('tg', 5001, 5001, { type: 'callback', data: 'a:41' });
+  const u = await store.getUser('tg', '5001');
+  assert.ok(u.cartAt, 'время изменения корзины запомнили');
+  const day = new Date('2026-10-20T08:00:00Z').getTime(); // 11:00 в Сочи
+  await patchUser('tg', '5001', { cartAt: day - 3600e3 });
+  outbox.length = 0;
+  let r = await reminders.run({ now: day });
+  assert.equal(r.sent, 0, 'рано: прошёл час из трёх'); assert.equal(r.waiting, 1);
+  r = await reminders.run({ now: day + 2.1 * 3600e3 });
+  assert.equal(r.sent, 1);
+  const msg = outbox.find(m => m.target.chatId === '5001');
+  assert.match(msg.view.text, /🛒 У вас 1 товар в корзине!/);
+  assert.match(msg.view.text, /менеджер закрепил партию и окно доставки/);
+  assert.ok(flat(msg.view).some(b => b.app === 'cart') && flat(msg.view).some(b => b.cb === 'cart'));
+  outbox.length = 0;
+  r = await reminders.run({ now: day + 3 * 3600e3 });
+  assert.equal(r.sent, 0, 'повторно сразу не шлём');
+  r = await reminders.run({ now: day + 23.5 * 3600e3 }); // сутки с изменения корзины, 10:30 по Сочи
+  assert.equal(r.sent, 1, 'второе — через сутки');
+  assert.match(outbox.at(-1).view.text, /^⏰/);
+  r = await reminders.run({ now: day + 3 * 24 * 3600e3 });
+  assert.equal(r.sent, 0, 'больше двух раз не беспокоим');
+
+  // ночью ждём; после заказа не пишем
+  c = await say('tg', 5002, 5002, { type: 'callback', data: 'a:41' });
+  await patchUser('tg', '5002', { cartAt: day - 10 * 3600e3 });
+  r = await reminders.run({ now: new Date('2026-10-20T20:00:00Z').getTime() }); // 23:00 в Сочи
+  assert.equal(r.skipped, 'ночь');
+  await patchUser('tg', '5002', { cart: {} });
+  r = await reminders.run({ now: day });
+  assert.equal(r.sent, 0);
+
+  // ручной запуск по ключу
+  const { srv, req } = await startServer({ vercel: true });
+  try {
+    assert.equal((await req('GET', '/cron/reminders?key=wrong')).status, 403);
+    assert.equal((await req('GET', '/cron/reminders?key=' + config.cronSecret)).body.ok, true);
+  } finally { srv.close(); }
+});
+
+test('оформление бота: приветствие с баннером, описание, аватар', async () => {
+  const branding = require('../src/branding');
+  const w = branding.welcome('Анна');
+  assert.match(w.text, /^Здравствуйте, Анна! 👋/);
+  assert.match(w.text, /<b>Seafood Сочи<\/b>/);
+  assert.match(w.text, /Кешбэк 5%/);
+  assert.equal(w.photo, 'https://bot.example.ru/static/welcome.jpg');
+  const tg = require('../src/adapters/telegram');
+  hub.register('tg', tg);
+  try {
+    const calls = [];
+    global.fetch = async (url, opt = {}) => { calls.push({ url: String(url), body: opt.body }); return { ok: true, status: 200, json: async () => ({ ok: true, result: true }) }; };
+    const r = await branding.apply({ photo: true });
+    assert.deepEqual(r.tg, { name: true, description: true, short: true, commands: true, photo: true });
+    const desc = JSON.parse(calls.find(c => c.url.endsWith('setMyDescription')).body);
+    assert.match(desc.description, /Нажмите «Старт»/);
+    assert.ok(desc.description.length <= 512);
+    const photo = calls.find(c => c.url.endsWith('setMyProfilePhoto'));
+    assert.ok(photo.body instanceof FormData, 'аватар загружается файлом');
+    assert.equal(JSON.parse(photo.body.get('photo')).photo, 'attach://avatar');
+  } finally { hub.register('tg', fake('tg')); global.fetch = realFetch; }
+  // своё приветствие из админки
+  await catalog.saveSettings({ welcome_text: 'Привет{name}! *Скидка* для вас' });
+  assert.equal(branding.welcome('Олег').text, 'Привет, Олег! <b>Скидка</b> для вас');
+  await catalog.saveSettings({ welcome_text: '' });
 });

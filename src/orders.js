@@ -4,6 +4,7 @@ const catalog = require('./catalog');
 const store = require('./store');
 const hub = require('./hub');
 const b24 = require('./b24');
+const Z = require('./shared/zones');
 
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const PLATFORM = { tg: 'Telegram', max: 'MAX', web: 'браузер' };
@@ -44,9 +45,30 @@ function validate(input) {
   return { errors, name, phone, address, sum };
 }
 
+const validGeo = g => g && isFinite(+g.lat) && isFinite(+g.lon) && +g.lat > 40 && +g.lat < 48 && +g.lon > 35 && +g.lon < 45 ? { lat: +(+g.lat).toFixed(6), lon: +(+g.lon).toFixed(6) } : null;
+
+// Зона и стоимость доставки по точке на карте (или по адресу, если точки нет)
+async function deliveryFor(geo, address, sum) {
+  const zones = catalog.get().zones || [];
+  if (!zones.length) return { geo: validGeo(geo), delivery: null };
+  let g = validGeo(geo);
+  if (!g && address) {
+    const m = String(address).match(/pt=([\d.]+),([\d.]+)/); // геоточка из бота
+    if (m) g = validGeo({ lon: m[1], lat: m[2] });
+    else { const r = await require('./geocode').search(address).catch(() => null); if (r) g = validGeo(r); }
+  }
+  if (!g) return { geo: null, delivery: { unknown: true } };
+  const z = Z.find(zones, g.lat, g.lon);
+  return { geo: g, delivery: z ? Z.cost(z, sum) : { outside: true } };
+}
+
 async function create(input) {
   const v = validate(input);
   if (v.errors.length) return { ok: false, errors: v.errors };
+  const { geo, delivery } = await deliveryFor(input.geo, v.address, v.sum.sum);
+  const strict = catalog.get().settings.zone_strict === '1';
+  if (delivery && delivery.outside && strict) return { ok: false, errors: ['Этот адрес вне зоны доставки. Проверьте точку на карте или позвоните нам.'] };
+  if (delivery && delivery.minOrder && v.sum.sum < delivery.minOrder) return { ok: false, errors: [`В зону «${delivery.name}» минимальный заказ ${P.rub(delivery.minOrder)}, сейчас ${P.rub(v.sum.sum)}`] };
   // Оплата бонусами: только покупателю из мессенджера и не больше разрешённой доли
   const loyalty = require('./loyalty');
   let bonusUsed = 0;
@@ -67,7 +89,9 @@ async function create(input) {
     lines: v.sum.lines,
     sum: v.sum.sum,
     bonusUsed,
-    toPay: v.sum.sum - bonusUsed,
+    geo,
+    delivery,
+    toPay: v.sum.sum - bonusUsed + ((delivery && delivery.price) || 0),
     weighed: v.sum.weighed,
     managerMsgs: [],
   });
@@ -91,7 +115,21 @@ async function create(input) {
   return { ok: true, order: o };
 }
 
-const bonusLine = o => (o.bonusUsed ? `\n💎 Бонусами: −${P.rub(o.bonusUsed)}\n<b>К оплате: ${P.rub(Math.max(0, (o.finalSum || o.sum) - o.bonusUsed))}</b>` : '');
+// Строка доставки и итог к оплате
+function deliveryText(d) {
+  if (!d) return '';
+  if (d.unknown) return '🚚 Доставка: стоимость подтвердит менеджер';
+  if (d.outside) return '🚚 Доставка: адрес вне наших зон — менеджер согласует условия';
+  return `🚚 Доставка (${esc(d.name)}): ${d.price ? P.rub(d.price) : 'бесплатно'}`;
+}
+const toPay = o => Math.max(0, (o.finalSum || o.sum) - (o.bonusUsed || 0)) + ((o.delivery && o.delivery.price) || 0);
+function bonusLine(o) {
+  const rows = [];
+  if (o.bonusUsed) rows.push(`💎 Бонусами: −${P.rub(o.bonusUsed)}`);
+  if (o.delivery) rows.push(deliveryText(o.delivery));
+  if (o.bonusUsed || (o.delivery && o.delivery.price)) rows.push(`<b>К оплате: ${P.rub(toPay(o))}</b>`);
+  return rows.length ? '\n' + rows.join('\n') : '';
+}
 
 function customerText(o) {
   return `✅ <b>Заказ №${o.id} принят!</b>\n\n${linesText(o.lines)}\n\n<b>Примерно: ${P.rub(o.sum)}</b>${bonusLine(o)}${o.weighed ? '\n<i>Весовой товар взвесим при сборке — итог подтвердит менеджер.</i>' : ''}\n\n📍 ${esc(o.address)}\n🕒 ${esc(o.time)}\n💳 ${esc(o.pay)}\n\nМенеджер свяжется с вами в течение 15 минут. Статус заказа придёт в этот чат.`;
@@ -107,7 +145,7 @@ function managerView(o) {
     '',
     `👤 ${esc(o.customer.name)}${who}`,
     `📱 ${esc(o.customer.phone)}`,
-    `📍 ${esc(o.address)}`,
+    `📍 ${esc(o.address)}${o.geo ? ` · <a href="https://yandex.ru/maps/?pt=${o.geo.lon},${o.geo.lat}&z=17&l=map">на карте</a>` : ''}`,
     `🕒 ${esc(o.time)}`,
     `💳 ${esc(o.pay)}`,
     o.comment ? `💬 ${esc(o.comment)}` : '',
@@ -176,9 +214,9 @@ async function setStatus(id, status, by) {
 async function setFinalSum(id, sum, by) {
   const cur = await store.order(id);
   if (!cur) return null;
-  const o = await store.setOrder(id, { finalSum: sum, toPay: Math.max(0, sum - (cur.bonusUsed || 0)), by });
-  await notifyCustomer(o, `⚖️ Взвесили ваш заказ №${o.id}: итог <b>${P.rub(sum)}</b>.${o.bonusUsed ? `\nСписано бонусами: −${P.rub(o.bonusUsed)}, к оплате <b>${P.rub(o.toPay)}</b>.` : ''}\nДоставка: ${esc(o.time)}.`, [[{ text: '👍 Всё верно', cb: 'thx' }, { text: '📞 Менеджер', cb: 'ct' }]]);
+  const o = await store.setOrder(id, { finalSum: sum, toPay: toPay({ ...cur, finalSum: sum }), by });
+  await notifyCustomer(o, `⚖️ Взвесили ваш заказ №${o.id}: итог <b>${P.rub(sum)}</b>.${o.bonusUsed ? `\nСписано бонусами: −${P.rub(o.bonusUsed)}.` : ''}${o.delivery && o.delivery.price ? `\nДоставка: ${P.rub(o.delivery.price)}.` : ''}${o.bonusUsed || (o.delivery && o.delivery.price) ? `\nК оплате: <b>${P.rub(o.toPay)}</b>.` : ''}\nДоставка: ${esc(o.time)}.`, [[{ text: '👍 Всё верно', cb: 'thx' }, { text: '📞 Менеджер', cb: 'ct' }]]);
   return o;
 }
 
-module.exports = { create, validate, summarize, linesText, customerText, managerView, setStatus, setFinalSum, refreshManagerCards, notifyCustomer, minOrder, STATUS, esc };
+module.exports = { deliveryFor, deliveryText, toPay, create, validate, summarize, linesText, customerText, managerView, setStatus, setFinalSum, refreshManagerCards, notifyCustomer, minOrder, STATUS, esc };
