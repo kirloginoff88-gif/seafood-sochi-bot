@@ -648,7 +648,7 @@ function loadLeaflet(){
 }
 function mkMap(el){
   var m=L.map(el,{zoomControl:true,tap:true}).setView([43.55,39.85],10);
-  L.tileLayer(BASE+'tiles/{z}/{x}/{y}.png',{maxZoom:18,minZoom:8,attribution:'© OpenStreetMap'}).addTo(m);
+  L.tileLayer(BASE+'tiles/{z}/{x}/{y}.png?v=osm',{maxZoom:18,minZoom:8,attribution:'© OpenStreetMap'}).addTo(m);
   var all=[];
   DATA.zones.forEach(function(z){ var p=L.polygon(z.polygon,{color:z.color,weight:2,fillOpacity:.25}).addTo(m).bindTooltip(esc(z.name)); all.push(p); });
   var fit=function(){ m.invalidateSize(); if(all.length) m.fitBounds(L.featureGroup(all).getBounds(),{padding:[16,16]}); };
