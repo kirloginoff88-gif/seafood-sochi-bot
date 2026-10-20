@@ -1,7 +1,7 @@
 // Плитки карты через свой сервер: покупателю не нужен доступ к сторонним картографическим сервисам,
 // а CDN хостинга кэширует картинки. Отдаём только район Сочи — чтобы сервер не стал открытым прокси.
+// OpenStreetMap — бесплатно, без ключа (CARTO стал требовать ключ и рисует водяной знак)
 const SOURCES = [
-  (z, x, y) => `https://${'abcd'[(x + y) % 4]}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`,
   (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
 ];
 // Сочи и окрестности с запасом: от Туапсе до Абхазии, с Красной Поляной
@@ -21,7 +21,7 @@ function allowed(z, x, y) {
 async function fetchTile(z, x, y) {
   for (const src of SOURCES) {
     try {
-      const r = await fetch(src(z, x, y), { headers: { 'User-Agent': 'SeafoodSochiShop/1.0 (delivery map)' }, signal: AbortSignal.timeout(8000) });
+      const r = await fetch(src(z, x, y), { headers: { 'User-Agent': 'SeafoodSochiShop/1.0 (delivery map; +https://seafood-sochi.ru)', Referer: 'https://seafood-sochi.ru/' }, signal: AbortSignal.timeout(8000) });
       if (r.ok) return Buffer.from(await r.arrayBuffer());
     } catch {}
   }

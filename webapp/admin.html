@@ -659,7 +659,7 @@ function renderZones(){
     el.innerHTML='<div class="toolbar"><button class="btn" type="button" data-znew>+ Зона</button><span class="muted">Цветные зоны и тарифы видны покупателям на карте в магазине. Стоимость доставки считается по точке адреса автоматически.</span></div>'+
       '<div class="dz"><div id="zmap"></div><div class="zside" id="zside"></div></div>';
     ZMAP=L.map('zmap',{zoomControl:true}).setView([43.58,39.85],10);
-    L.tileLayer('/tiles/{z}/{x}/{y}.png',{maxZoom:18,minZoom:8,attribution:'© OpenStreetMap, © CARTO'}).addTo(ZMAP);
+    L.tileLayer('/tiles/{z}/{x}/{y}.png',{maxZoom:18,minZoom:8,attribution:'© OpenStreetMap'}).addTo(ZMAP);
     ZLAYER=L.layerGroup().addTo(ZMAP);
     ZMAP.on('click',function(e){ if(!ZF) return; ZF.polygon.push([+e.latlng.lat.toFixed(5),+e.latlng.lng.toFixed(5)]); drawEditing(); });
   } else setTimeout(function(){ ZMAP.invalidateSize(); },50);
