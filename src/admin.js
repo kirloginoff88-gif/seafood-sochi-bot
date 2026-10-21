@@ -39,6 +39,12 @@ function sameOrigin(req) {
 
 const STATUSES = Object.keys(orders.STATUS);
 
+// Менеджер ли этот покупатель: в личке Telegram чат = пользователь, в MAX ищем чат в карточке покупателя
+async function isAppManager(platform, userId) {
+  const u = await store.getUser(platform, userId);
+  return (await store.isManager(platform, u.chatId || userId)) || (await store.isManager(platform, userId));
+}
+
 function adminState() {
   const c = catalog.get();
   return {
@@ -99,6 +105,17 @@ async function handle(req, res, url) {
     const a = crypto.createHash('sha256').update(String(body.password || '')).digest();
     const b = crypto.createHash('sha256').update(config.admin.password).digest();
     if (!crypto.timingSafeEqual(a, b)) { json(res, 401, { ok: false, error: 'Неверный пароль' }); return true; }
+    json(res, 200, { ok: true }, { 'Set-Cookie': cookieHeader(token(), TTL / 1000) });
+    return true;
+  }
+  // Вход из мини-приложения: менеджер (подключённый командой /manager) входит без пароля — по подписи мессенджера
+  if (action === 'login-app' && req.method === 'POST') {
+    if (loginLimit(clientIp(req))) { json(res, 429, { ok: false, error: 'Слишком много попыток. Подождите 15 минут.' }); return true; }
+    const body = await readBody(req).catch(() => ({}));
+    const platform = body.platform === 'max' ? 'max' : body.platform === 'tg' ? 'tg' : null;
+    const data = platform && require('./initdata').validate(body.initData, platform === 'tg' ? config.telegram.token : config.max.token);
+    if (!data || !data.user || !data.user.id) { json(res, 401, { ok: false, error: 'Откройте приложение из бота заново' }); return true; }
+    if (!(await isAppManager(platform, String(data.user.id)))) { json(res, 403, { ok: false, error: 'Вход только для менеджеров. Подключитесь в боте командой /manager КОД' }); return true; }
     json(res, 200, { ok: true }, { 'Set-Cookie': cookieHeader(token(), TTL / 1000) });
     return true;
   }
@@ -202,4 +219,4 @@ async function handle(req, res, url) {
   return true;
 }
 
-module.exports = { handle, authed };
+module.exports = { handle, authed, isAppManager };

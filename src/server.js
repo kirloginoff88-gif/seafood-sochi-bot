@@ -173,7 +173,8 @@ async function route(req, res) {
     if (/^ref_[A-Za-z0-9]{4,12}$/.test(who.startParam)) gift = await loyalty.applyReferral(who.platform, who.user.id, who.startParam, { hasOrders: u.orderIds.length > 0 });
     await store.saveUser(u);
     const account = await loyalty.account(who.platform, who.user.id, u);
-    return json(res, 200, { ok: true, platform: who.platform, user: who.user, cart: cleanCart(u.cart), profile: { name: u.profile.name || who.user.name, phone: u.profile.phone || '', address: u.profile.address || '' }, account, gift });
+    const manager = await admin.isAppManager(who.platform, who.user.id);
+    return json(res, 200, { ok: true, platform: who.platform, user: who.user, cart: cleanCart(u.cart), profile: { name: u.profile.name || who.user.name, phone: u.profile.phone || '', address: u.profile.address || '' }, account, gift, manager });
   }
 
   if (req.method === 'POST' && p === '/api/account') {

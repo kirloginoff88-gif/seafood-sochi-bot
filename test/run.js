@@ -776,3 +776,23 @@ test('оформление бота: приветствие с баннером,
   assert.equal(branding.welcome('Олег').text, 'Привет, Олег! <b>Скидка</b> для вас');
   await catalog.saveSettings({ welcome_text: '' });
 });
+
+test('менеджер входит в админку из мини-приложения без пароля, покупатель — нет', async () => {
+  const { srv, req } = await startServer({ vercel: REDIS });
+  try {
+    const mk = id => sign({ auth_date: String(Math.floor(Date.now() / 1000)), user: JSON.stringify({ id, first_name: 'Тест' }) }, 'max-test-token');
+    // 900 подключён менеджером в чате 9000 (тест чат-бота выше)
+    assert.equal((await req('POST', '/api/session', { platform: 'max', initData: mk(900) })).body.manager, true);
+    assert.equal((await req('POST', '/api/session', { platform: 'max', initData: mk(555) })).body.manager, false);
+    assert.equal((await req('POST', '/admin/api/login-app', { platform: 'max', initData: mk(555) })).status, 403);
+    assert.equal((await req('POST', '/admin/api/login-app', { platform: 'max', initData: mk(900) + 'x' })).status, 401);
+    assert.equal((await req('GET', '/admin/api/state')).status, 401);
+    const ok = await req('POST', '/admin/api/login-app', { platform: 'max', initData: mk(900) });
+    assert.equal(ok.status, 200);
+    assert.equal((await req('GET', '/admin/api/state')).status, 200, 'кука админки выдана');
+  } finally { srv.close(); }
+  const c = await say('max', 900, 9000, { type: 'text', text: '/admin' });
+  assert.ok(flat(last(c)).some(b => b.app === 'admin'));
+  const c2 = await say('max', 555, 5550, { type: 'text', text: '/admin' });
+  assert.match(last(c2).text, /доступна менеджерам/);
+});

@@ -255,7 +255,7 @@ label.f small{font-weight:500;color:var(--muted)}
 <div id="app" hidden>
   <header>
     <div class="wrap">
-      <div class="hd"><b id="brand">Seafood Сочи</b><small>управление магазином</small><span class="sp"></span><a href="/" target="_blank" rel="noopener">Открыть магазин ↗</a><button id="logout" type="button">Выйти</button></div>
+      <div class="hd"><b id="brand">Seafood Сочи</b><small>управление магазином</small><span class="sp"></span><a href="/" target="_blank" rel="noopener" id="shopLink">Открыть магазин ↗</a><button id="logout" type="button">Выйти</button></div>
       <nav class="tabs" id="tabs">
         <button class="tab on" data-tab="products" type="button">Товары</button>
         <button class="tab" data-tab="cats" type="button">Категории</button>
@@ -861,6 +861,13 @@ document.addEventListener('click',function(e){
     return api('order/sum',{id:+d.osend,sum:+v}).then(function(){ toast('Итог отправлен покупателю'); loadOrders(); }).catch(fail);
   }
 });
+
+/* ---------- открыто из мини-приложения ---------- */
+(function(){
+  var q=new URLSearchParams(location.search);
+  if(q.get('from')!=='app') return;
+  var a=$('shopLink'); a.textContent='← В магазин'; a.removeAttribute('target'); a.href='/app/?p='+(q.get('p')==='max'?'max':'tg');
+})();
 
 /* ---------- запуск ---------- */
 function boot(){

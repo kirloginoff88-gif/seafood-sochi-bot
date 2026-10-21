@@ -348,7 +348,7 @@ var SDK = { tg:'https://telegram.org/js/telegram-web-app.js', max:'https://st.ma
 var WA = null;              // объект мессенджера (Telegram.WebApp или window.WebApp в MAX)
 var INIT = '';              // подписанная строка initData
 var DATA = null, BY = {};   // каталог
-var cart = {}, profile = {}, ACC = null;
+var cart = {}, profile = {}, ACC = null, MANAGER = false;
 var screen = 'shop', query = '', form = { time:'', pay:'', useBonus:false, geo:null };
 var BASE = location.pathname.replace(/app\/[^/]*$/, ''); // корень сервера (учитывает подпуть)
 var COLORS = ['#0E7C86','#E4572E','#1F3A5F','#7A4FB5','#C99A2E','#2E8B57'];
@@ -774,7 +774,7 @@ function renderAccount(){
       (tg?'<a class="btn" href="'+esc(tg)+'" target="_blank" rel="noopener">Открыть в Telegram</a>':'')+'</div>'+contactsHtml(s);
     return;
   }
-  var a=ACC, b=a.bonus, html='<h1>Кабинет</h1>';
+  var a=ACC, b=a.bonus, html='<h1>Кабинет</h1>'+adminCard();
   html+='<div class="hero"><div class="hi">Здравствуйте'+(profile.name?', '+esc(profile.name):'')+'!</div><div class="bal">'+b.balance+'<small>'+P.plural(b.balance,'бонус','бонуса','бонусов')+'</small></div>'+
     '<div class="rule">1 бонус = 1 ₽ · оплачивайте до '+b.maxPay+'% заказа</div>'+
     '<div class="lvl"><div><b>'+a.orders.length+'</b><small>'+P.plural(a.orders.length,'заказ','заказа','заказов')+'</small></div><div><b>'+a.ref.count+'</b><small>друзей</small></div><div><b>'+b.cashback+'%</b><small>кешбэк</small></div></div></div>';
@@ -801,6 +801,18 @@ function renderAccount(){
   if(profile.phone||profile.address) html+='<h2>Мои данные</h2><div class="card" style="padding:12px 14px;font-size:13.5px">'+(profile.name?'<div>👤 '+esc(profile.name)+'</div>':'')+(profile.phone?'<div>📱 '+esc(profile.phone)+'</div>':'')+(profile.address?'<div>📍 '+esc(profile.address)+'</div>':'')+'<p class="muted" style="margin:6px 0 0">Подставляем при оформлении — можно изменить в форме заказа.</p></div>';
   html+=contactsHtml(s);
   v.innerHTML=html;
+}
+// Вход в админ-панель для менеджеров — без пароля, по подписи мессенджера
+function adminCard(){
+  if(!MANAGER) return '';
+  return '<button class="bonusband" data-admin style="margin:0 0 14px;width:100%"><span class="ic">⚙️</span><div><b>Админ-панель</b><small>Товары, заказы, акции, доставка — вы менеджер</small></div><span class="ar">›</span></button>';
+}
+function openAdmin(){
+  toast('Открываем админ-панель…');
+  api('POST','admin/api/login-app',{}).then(function(r){
+    if(!r.ok) return toast(r.error||'Не получилось войти');
+    location.href=BASE+'admin?from=app&p='+PLATFORM;
+  }).catch(function(){ toast('Нет связи — попробуйте ещё раз'); });
 }
 function contactsHtml(s){
   var h='<h2>Связь с магазином</h2><div class="contacts">';
@@ -887,6 +899,7 @@ document.addEventListener('click',function(e){
   if(d.tab){ haptic(); return go(d.tab); }
   if(d.go) return go(d.go);
   if(d.repeat) return repeatOrder(d.repeat);
+  if(d.admin!==undefined) return openAdmin();
   if(d.pick!==undefined) return openPicker();
   if(d.pclose!==undefined) return closePicker(false);
   if(d.pok!==undefined) return closePicker(true);
@@ -946,12 +959,13 @@ loadSdk().then(function(){
   var s=DATA.settings;
   $('brand').textContent=s.brand||'Seafood Сочи';
   $('sub').textContent='Доставка по Сочи · '+(s.hours||'').replace(/^Ежедневно /,'');
-  if(ses && ses.ok){ profile=ses.profile||{}; cart=ses.cart||{}; ACC=ses.account||null; }
+  if(ses && ses.ok){ profile=ses.profile||{}; cart=ses.cart||{}; ACC=ses.account||null; MANAGER=!!ses.manager; }
   if(ses && ses._status===401){ toast('Откройте магазин из бота заново'); }
   if(!Object.keys(cart).length){ cart=store('cart_'+PLATFORM)||{}; if(Object.keys(cart).length) saveCart(); }
   Object.keys(cart).forEach(function(id){ if(!BY[id]) delete cart[id]; });
   paintChip(); renderPills();
   var start = qs.get('tab');
+  if(start==='admin'){ if(MANAGER) return openAdmin(); start='account'; }
   go(VIEWS[start] ? start : 'shop');
   if(ses && ses.gift && ses.gift.welcome) giftModal(ses.gift); else popupPromo();
 }).catch(function(){

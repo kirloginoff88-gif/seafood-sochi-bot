@@ -338,6 +338,7 @@ function wrapCtx(u, ctx) {
 async function route(u, ev, ctx) {
   // Служебные команды менеджера
   if (ev.type === 'text' && /^\/manager\b/i.test(ev.text || '')) return managerCommand(u, ev, ctx);
+  if (ev.type === 'text' && /^\/admin\b/i.test(ev.text || '')) return adminCommand(u, ev, ctx);
   if (await store.isManager(ev.platform, ev.chatId)) {
     const done = await managerHandle(u, ev, ctx);
     if (done) return;
@@ -497,7 +498,12 @@ async function managerCommand(u, ev, ctx) {
   if (arg === 'off') { await store.removeManager(ev.platform, ev.chatId); return ctx.reply({ text: 'Уведомления о заказах отключены.' }); }
   if (!config.managerPin || arg !== config.managerPin) return ctx.reply({ text: 'Неверный код. Попросите код у администратора.' });
   await store.addManager(ev.platform, ev.chatId, ev.user.name);
-  return ctx.reply({ text: `✅ Вы подключены как менеджер. Сюда будут приходить заказы и вопросы покупателей.\n\nОтключить: /manager off` });
+  return ctx.reply({ text: `✅ Вы подключены как менеджер. Сюда будут приходить заказы и вопросы покупателей.\n\nАдмин-панель открывается прямо из магазина (Кабинет → «Админ-панель») или командой /admin — без пароля.\nОтключить: /manager off`, buttons: adminButton() });
+}
+function adminButton() { return config.publicUrl ? [[{ text: '⚙️ Админ-панель', app: 'admin' }]] : []; }
+async function adminCommand(u, ev, ctx) {
+  if (!(await store.isManager(ev.platform, ev.chatId))) return ctx.reply({ text: 'Админ-панель доступна менеджерам. Подключитесь командой /manager КОД.' });
+  return ctx.reply({ text: '⚙️ Админ-панель: товары, заказы, акции, доставка и настройки.', buttons: adminButton() });
 }
 
 async function managerHandle(u, ev, ctx) {
