@@ -36,12 +36,12 @@ async function call(host, method, path, query, body) {
 }
 
 // Экран → NewMessageBody
-function render(view) {
+function render(view, { noApp } = {}) {
   const body = { text: (view.text || ' ').slice(0, 4000), format: 'html' };
   const rows = (view.buttons || []).map(r => r.map(b => {
     if (b.url) return { type: 'link', text: b.text, url: b.url };
     if (b.app) {
-      if (config.max.botName) return { type: 'open_app', text: b.text, web_app: config.max.botName };
+      if (config.max.botName && !noApp && !appBroken) return { type: 'open_app', text: b.text, web_app: config.max.botName };
       return config.publicUrl ? { type: 'link', text: b.text, url: config.appUrl('max') } : null;
     }
     if (b.contact) return { type: 'request_contact', text: b.text };
@@ -57,14 +57,28 @@ function targetQuery(target) {
   return target.chatId ? { chat_id: target.chatId } : { user_id: target.userId };
 }
 
+// Если мини-приложение ещё не привязано к боту в кабинете MAX, кнопка open_app не проходит —
+// тогда шлём обычную ссылку на магазин и больше не пробуем до перезапуска.
+let appBroken = false;
+const hasApp = view => (view.buttons || []).some(r => r.some(b => b.app));
+async function withAppFallback(fn, view) {
+  try { return await fn(render(view)); }
+  catch (e) {
+    if (e.network || !hasApp(view) || appBroken || !config.max.botName) throw e;
+    console.warn('[max] кнопка мини-приложения не принята, шлём ссылку:', e.message);
+    appBroken = true;
+    return fn(render(view, { noApp: true }));
+  }
+}
+
 async function send(target, view) {
-  const r = await api('POST', '/messages', targetQuery(target), render(view));
+  const r = await withAppFallback(body => api('POST', '/messages', targetQuery(target), body), view);
   return { msgId: r.message && r.message.body ? r.message.body.mid : null };
 }
 
 async function edit(target, msgId, view) {
   if (view.photo) return send(target, view); // сообщение с картинкой отправляем заново
-  await api('PUT', '/messages', { message_id: msgId }, render(view));
+  await withAppFallback(body => api('PUT', '/messages', { message_id: msgId }, body), view);
   return { msgId };
 }
 

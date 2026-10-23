@@ -61,20 +61,16 @@ async function apply({ photo } = {}) {
   const name = s.brand || 'Seafood Сочи';
   const description = plain('bot_description'), short = plain('bot_short');
   const out = {};
-  let avatar = null, avatarUrl = '';
+  let avatar = null;
   if (photo) {
     const own = await db.get('brand:avatar');
     avatar = own ? await media.read(own) : null;
     if (!avatar) avatar = fs.readFileSync(path.join(__dirname, '..', 'webapp', 'assets', 'avatar.jpg'));
-    avatarUrl = config.publicUrl ? config.publicUrl + (own || '/static/avatar.jpg') : '';
   }
   if (hub.adapters.tg && hub.adapters.tg.brand) {
     try { out.tg = await hub.adapters.tg.brand({ name, description, short, photo: avatar }); } catch (e) { out.tg = { error: e.message }; }
   }
-  if (hub.adapters.max && hub.adapters.max.brand) {
-    const commands = require('./adapters/telegram').COMMANDS;
-    try { out.max = await hub.adapters.max.brand({ name, description: short, commands, photoUrl: avatarUrl }); } catch (e) { out.max = { error: e.message }; }
-  }
+  // В MAX имя, описание и аватар задаются в кабинете «MAX для партнёров» (API их не меняет)
   await db.set('brand:applied', { at: Date.now(), photo: !!photo });
   return out;
 }
