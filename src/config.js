@@ -36,7 +36,7 @@ const config = {
   max: {
     token: env('MAX_TOKEN'),
     botName: env('MAX_BOT_NAME'), // публичное имя бота, к которому привязано мини-приложение
-    api: env('MAX_API', 'https://platform-api2.max.ru'),
+    api: env('MAX_API', 'https://platform-api.max.ru'),
     mode: env('MAX_MODE', 'polling'), // polling | webhook
     webhookSecret: env('MAX_WEBHOOK_SECRET'),
     managers: list('MAX_MANAGER_CHAT_IDS'),

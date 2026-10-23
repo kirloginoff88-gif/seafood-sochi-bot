@@ -281,7 +281,7 @@ test('MAX: кнопки, ответ на нажатие через /answers, к�
     const calls = mockFetch(c => (c.url.includes('/messages') && c.method === 'POST' ? { message: { body: { mid: 'mid.1' } } } : { success: true }));
     await max.handleUpdate({ update_type: 'bot_started', chat_id: 321, user: { user_id: 42, first_name: 'Олег' }, timestamp: 1 });
     const sent = calls.find(c => c.method === 'POST' && c.url.includes('/messages'));
-    assert.ok(sent.url.startsWith('https://platform-api2.max.ru/messages?chat_id=321'));
+    assert.ok(sent.url.startsWith('https://platform-api.max.ru/messages?chat_id=321'));
     assert.equal(sent.headers.Authorization, 'max-test-token');
     assert.match(sent.body.text, /Seafood Сочи/);
 

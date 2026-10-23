@@ -1,16 +1,35 @@
-// Адаптер MAX Bot API (platform-api2.max.ru): апдейты → события бота, экраны → сообщения.
+// Адаптер MAX Bot API (platform-api.max.ru): апдейты → события бота, экраны → сообщения.
 // Схема: github.com/max-messenger/api-schema. Токен — в заголовке Authorization.
 const config = require('../config');
 const bot = require('../bot');
 
+// Основной адрес API и запасной: если один недоступен по сети — пробуем другой и запоминаем рабочий
+const HOSTS = [...new Set([config.max.api, 'https://platform-api.max.ru', 'https://platform-api2.max.ru'])];
+let hostIdx = 0;
 async function api(method, path, query, body) {
+  let lastErr;
+  for (let i = 0; i < HOSTS.length; i++) {
+    const host = HOSTS[(hostIdx + i) % HOSTS.length];
+    try {
+      const r = await call(host, method, path, query, body);
+      hostIdx = (hostIdx + i) % HOSTS.length;
+      return r;
+    } catch (e) {
+      if (!e.network) throw e;
+      lastErr = e;
+    }
+  }
+  throw new Error(`MAX API недоступен с сервера (${lastErr.message}). Возможно, MAX не пускает запросы из-за рубежа — нужен сервер в России.`);
+}
+
+async function call(host, method, path, query, body) {
   const qs = query ? '?' + new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined && v !== null)).toString() : '';
-  const res = await fetch(config.max.api + path + qs, {
+  const res = await fetch(host + path + qs, {
     method,
     headers: { Authorization: config.max.token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
     signal: AbortSignal.timeout(path === '/updates' ? 45000 : 15000),
-  });
+  }).catch(e => { const err = new Error(e.cause ? `${e.message}: ${e.cause.code || e.cause.message}` : e.message); err.network = true; throw err; });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`${method} ${path}: ${json.code || res.status} ${json.message || ''}`);
   return json;
