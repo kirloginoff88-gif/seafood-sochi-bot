@@ -135,6 +135,7 @@ async function status() {
   if (!config.max.token) return { enabled: false };
   const me = await api('GET', '/me');
   if (!config.max.botName && me.username) config.max.botName = me.username;
+  if (me.username) await require('../db').set('bot:max:username', me.username).catch(() => {}); // для кнопки мини-приложения на других экземплярах
   const subs = await api('GET', '/subscriptions').catch(() => ({ subscriptions: [] }));
   const expected = `${config.publicUrl}/webhook/max`;
   const urls = (subs.subscriptions || []).map(x => x.url);
@@ -166,6 +167,8 @@ async function start() {
 // Вебхук: проверяем секрет и обрабатываем до ответа
 async function webhook(headers, body) {
   if (headers['x-max-bot-api-secret'] !== config.max.webhookSecret) return false;
+  // Имя бота нужно кнопке «Открыть магазин»: если не задано в MAX_BOT_NAME — берём сохранённое при подключении
+  if (!config.max.botName) config.max.botName = (await require('../db').get('bot:max:username').catch(() => '')) || '';
   await handleUpdate(body);
   return true;
 }
