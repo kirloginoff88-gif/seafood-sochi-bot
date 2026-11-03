@@ -160,7 +160,11 @@ const UPDATES = ['message_created', 'message_callback', 'bot_started'];
 async function connect() {
   if (!config.max.token) throw new Error('MAX_TOKEN не задан');
   if (!config.publicUrl) throw new Error('Не известен публичный адрес (PUBLIC_URL)');
-  await api('POST', '/subscriptions', null, { url: `${config.publicUrl}/webhook/max`, update_types: UPDATES, secret: config.max.webhookSecret });
+  const url = `${config.publicUrl}/webhook/max`;
+  // Старые подписки (например, прежний адрес на Vercel) снимаем — иначе бот ответит дважды
+  const subs = await api('GET', '/subscriptions').catch(() => ({ subscriptions: [] }));
+  for (const sub of subs.subscriptions || []) if (sub.url !== url) await api('DELETE', '/subscriptions', { url: sub.url }).catch(e => console.warn('[max] не снять подписку', sub.url, e.message));
+  await api('POST', '/subscriptions', null, { url, update_types: UPDATES, secret: config.max.webhookSecret });
   return status();
 }
 
