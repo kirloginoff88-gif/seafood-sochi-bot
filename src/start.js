@@ -5,8 +5,11 @@ const store = require('./store');
 const server = require('./server');
 
 (async () => {
-  await catalog.sync();
+  // Сначала поднимаем HTTP (чтобы проверка состояния проходила), потом читаем каталог
   await server.start();
+  const t = Date.now();
+  try { await catalog.sync(); console.log(`[db] ${require('./db').kind}: каталог загружен за ${Date.now() - t} мс`); }
+  catch (e) { console.error(`[db] хранилище недоступно: ${e.message}`); }
   if (!config.publicUrl) console.warn('[app] PUBLIC_URL не задан — кнопка «Открыть магазин» и вебхуки работать не будут');
   for (const pl of ['tg', 'max']) {
     if (!hub.adapters[pl]) continue;

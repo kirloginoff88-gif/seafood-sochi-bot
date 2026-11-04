@@ -86,9 +86,12 @@ async function route(req, res) {
     return res.end();
   }
 
+  // Проверка состояния: отвечает сразу, базу не трогает (её проверяет /health?db=1)
   if (req.method === 'GET' && p === '/health') {
-    await catalog.sync();
-    return json(res, 200, { ok: true, products: catalog.get().products.length, storage: db.kind, admin: !!config.admin.password });
+    if (url.searchParams.get('db') !== '1') return json(res, 200, { ok: true, storage: db.kind, uptime: Math.round(process.uptime()) });
+    const t = Date.now();
+    try { await catalog.sync(); return json(res, 200, { ok: true, products: catalog.get().products.length, storage: db.kind, admin: !!config.admin.password, dbMs: Date.now() - t }); }
+    catch (e) { return json(res, 503, { ok: false, storage: db.kind, error: e.message }); }
   }
 
   // --- вебхуки: обрабатываем полностью до ответа ---
@@ -231,7 +234,8 @@ async function handle(req, res) {
 
 function start() {
   const srv = http.createServer(handle);
-  return new Promise(r => srv.listen(config.port, () => { console.log(`[http] слушаю :${config.port}`); r(srv); }));
+  // 0.0.0.0 — явно: платформы с контейнерами (Timeweb App Platform и др.) стучатся на этот адрес
+  return new Promise(r => srv.listen(config.port, config.host, () => { console.log(`[http] слушаю ${config.host}:${config.port}`); r(srv); }));
 }
 
 // Экспорт по умолчанию — сам обработчик: так файл годится и как точка входа Vercel

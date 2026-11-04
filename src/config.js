@@ -19,6 +19,7 @@ const list = k => env(k).split(',').map(s => s.trim()).filter(Boolean);
 const config = {
   root: ROOT,
   port: +env('PORT', '8080'),
+  host: env('HOST', '0.0.0.0'),
   // Публичный адрес сервера с HTTPS, например https://bot.seafood-sochi.ru
   // На Vercel адрес берётся сам из VERCEL_PROJECT_PRODUCTION_URL (например seafood-sochi-bot.vercel.app)
   publicUrl: (env('PUBLIC_URL') || (env('VERCEL_PROJECT_PRODUCTION_URL') ? 'https://' + env('VERCEL_PROJECT_PRODUCTION_URL') : '')).replace(/\/$/, ''),
