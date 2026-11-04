@@ -234,8 +234,8 @@ async function handle(req, res) {
 
 function start() {
   const srv = http.createServer(handle);
-  // 0.0.0.0 — явно: платформы с контейнерами (Timeweb App Platform и др.) стучатся на этот адрес
-  return new Promise(r => srv.listen(config.port, config.host, () => { console.log(`[http] слушаю ${config.host}:${config.port}`); r(srv); }));
+  // Без HOST слушаем все адреса (и 127.0.0.1, и ::1) — проверка состояния в контейнере пройдёт при любом «localhost»
+  return new Promise(r => srv.listen(config.port, config.host, () => { const a = srv.address(); console.log(`[http] слушаю ${a.address}:${a.port}`); r(srv); }));
 }
 
 // Экспорт по умолчанию — сам обработчик: так файл годится и как точка входа Vercel
