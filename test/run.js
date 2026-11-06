@@ -796,3 +796,45 @@ test('менеджер входит в админку из мини-прилож
   const c2 = await say('max', 555, 5550, { type: 'text', text: '/admin' });
   assert.match(last(c2).text, /доступна менеджерам/);
 });
+
+test('КБЖУ: справочник, обработка, съедобная часть, польза заказа, свои цифры из админки', async () => {
+  const N = require('../src/shared/nutrition');
+  const trout = N.of({ name: 'Форель радужная', note: 'филе', cid: 'fresh', unit: 'кг' });
+  assert.equal(trout.kcal, 141); assert.equal(trout.yield, 1);
+  assert.ok(trout.tags.includes('Высокий белок'));
+  const whole = N.of({ name: 'Форель радужная', note: 'целая', cid: 'fresh', unit: 'кг', piece_g: 1000 });
+  assert.equal(whole.yield, 0.6, 'у целой рыбы считаем только мясо');
+  const dried = N.of({ name: 'Лещ вяленый', cid: 'vyalenaya', unit: 'кг' });
+  assert.ok(dried.p > 30, 'вяленая — белка больше на 100 г');
+  assert.equal(N.of({ name: 'Корюшка сухая', cid: 'vyalenaya' }).label, 'вяленая');
+  assert.equal(N.packGrams({ name: 'Икра горбуши', note: '250 г' }), 250);
+  assert.equal(N.packGrams({ name: 'Креветки', note: '1 кг' }), 1000);
+  assert.equal(N.gramsOf({ unit: 'кг', piece_g: 0 }, 700), 700);
+  assert.equal(N.gramsOf({ unit: 'кг', piece_g: 1500 }, 2), 3000);
+  const byId = { 1: { id: 1, name: 'Лосось', note: 'филе', unit: 'кг' }, 2: { id: 2, name: 'Икра горбуши', note: '250 г', unit: 'шт' }, 3: { id: 3, name: 'Что-то', note: '', unit: 'шт' } };
+  const b = N.order([{ id: 1, qty: 1000 }, { id: 2, qty: 1 }, { id: 3, qty: 1 }], byId);
+  assert.equal(b.counted, 2); assert.equal(b.skipped, 1);
+  assert.ok(b.p > 250 && b.o3 > 25 && b.proteinDays > 3 && b.omegaDays > 50);
+  const own = N.of({ name: 'Лосось', nut: { kcal: 150, p: 22, f: 7, c: 0, o3: 1.5, yield: 80 } });
+  assert.deepEqual([own.kcal, own.p, own.yield, own.custom], [150, 22, 0.8, true]);
+
+  // свои КБЖУ из админки сохраняются и уходят в каталог мини-приложения; пустые — убираются
+  const p = catalog.get().products.find(x => !x.out);
+  await catalog.saveProduct({ ...p, nut: { kcal: '123', p: '20,5', f: 3, c: 0, o3: 0.9, yield: 100 } });
+  assert.deepEqual(catalog.get().byId[p.id].nut, { kcal: 123, p: 20.5, f: 3, c: 0, o3: 0.9, yield: 100 });
+  const { srv, req } = await startServer();
+  try {
+    const cat = (await req('GET', '/api/catalog')).body;
+    assert.equal(cat.products.find(x => x.id === p.id).nut.kcal, 123);
+    assert.equal((await req('GET', '/static/nutrition.js')).status, 200);
+  } finally { srv.close(); }
+  const c = await say('tg', 77, 77, { type: 'callback', data: `p:${p.id}` });
+  assert.match(last(c).text, /На 100 г:.*123 ккал/);
+  await catalog.saveProduct({ ...p, nut: { kcal: '' } });
+  assert.equal(catalog.get().byId[p.id].nut, undefined);
+
+  await patchUser('tg', '77', { cart: { [byIdFish()]: 1000 } });
+  const c2 = await say('tg', 77, 77, { type: 'callback', data: 'cart' });
+  assert.match(last(c2).text, /Польза вашего заказа[\s\S]*Белок/);
+  function byIdFish() { return catalog.get().products.find(x => !x.out && x.unit === 'кг' && !+x.piece_g && x.price > 0).id; }
+});

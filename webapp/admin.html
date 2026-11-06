@@ -284,6 +284,7 @@ label.f small{font-weight:500;color:var(--muted)}
 
 <script src="/app/pricing.js"></script>
 <script src="/static/zones.js"></script>
+<script src="/static/nutrition.js"></script>
 <script src="/static/leaflet.js"></script>
 <script>
 (function(){
@@ -389,7 +390,7 @@ function blank(){ return {id:0,cid:ui.cid||(S.cats[0]&&S.cats[0].cid)||'',name:'
 function modeOf(f){ return f.unit!=='кг'?'pack':(+f.piece_g>0?'piece':'weight'); }
 function openProduct(id){
   var p=id?S.products.find(function(x){return x.id===+id;}):null;
-  F=Object.assign(blank(), p||{}); F._mode=modeOf(F); F._sale=+F.sale_price>0; F._sure=false;
+  F=Object.assign(blank(), p||{}); F._nut=Object.assign({}, F.nut||{}); F._nutOpen=!!F.nut; F._mode=modeOf(F); F._sale=+F.sale_price>0; F._sure=false;
   drawProduct(); $('modal').hidden=false; document.body.style.overflow='hidden';
   setTimeout(function(){ if(!id) $('f-name').focus(); },50);
 }
@@ -407,7 +408,8 @@ function toProduct(){
   var f=F, m=f._mode;
   return { id:f.id, cid:f.cid, name:String(f.name).trim(), note:String(f.note).trim(), price:+f.price||0, out:f.out?1:0, image:f.image||'',
     unit: m==='pack'?'шт':'кг', piece_g: m==='piece'?(+f.piece_g||0):0, min_g: m==='weight'?(+f.min_g||0):0,
-    sale_price: f._sale?(+f.sale_price||0):0, sale_from: f._sale?f.sale_from:'', sale_to: f._sale?f.sale_to:'' };
+    sale_price: f._sale?(+f.sale_price||0):0, sale_from: f._sale?f.sale_from:'', sale_to: f._sale?f.sale_to:'',
+    nut: f._nut && String(f._nut.kcal||'').trim() ? fillNut(f) : null };
 }
 function drawProduct(){
   var f=F, m=f._mode;
@@ -430,6 +432,7 @@ function drawProduct(){
   (f._sale?'<div class="row2"><label class="f">Цена по акции, ₽<input class="in" type="number" inputmode="numeric" min="0" data-f="sale_price" value="'+(+f.sale_price||'')+'"></label><span></span>'+
     '<label class="f">С <small>пусто — сразу</small><input class="in" type="date" data-f="sale_from" value="'+esc(f.sale_from)+'"></label><label class="f">По <small>включительно; пусто — бессрочно</small><input class="in" type="date" data-f="sale_to" value="'+esc(f.sale_to)+'"></label></div>':'')+
   '</div>'+
+  nutBox(f)+
   '<label class="sw"><input type="checkbox" data-f="_instock"'+(f.out?'':' checked')+'><i></i><span style="color:var(--ink);font-size:13.5px">В наличии — показывать покупателям</span></label>'+
   '<div class="preview" id="pv">'+previewText()+'</div>'+
   '<div class="err" id="perr" hidden></div>'+
@@ -437,15 +440,33 @@ function drawProduct(){
   (f.id?'<button class="btn danger'+(f._sure?' sure':'')+'" type="button" data-del>'+(f._sure?'Точно удалить?':'Удалить')+'</button>':'')+'</div>'+
   '</form>';
 }
+// пустые поля КБЖУ берём из автоматического расчёта
+function fillNut(f){
+  var n=Object.assign({}, f._nut), a=window.Nutrition ? Nutrition.of({name:f.name,note:f.note,cid:f.cid,unit:f._mode==='pack'?'шт':'кг',piece_g:f.piece_g}) : null;
+  ['p','f','c','o3','yield'].forEach(function(k){ if(String(n[k]==null?'':n[k]).trim()==='' && a) n[k]= k==='yield' ? Math.round(a.yield*100) : a[k]; });
+  return n;
+}
+function nutBox(f){
+  var a=window.Nutrition ? Nutrition.of(Object.assign(toProduct(),{nut:null})) : null, n=f._nut||{};
+  function inp(k,label,ph){ return '<label class="f">'+label+'<input class="in" inputmode="decimal" data-nut="'+k+'" value="'+esc(n[k]!=null?n[k]:'')+'" placeholder="'+esc(ph)+'"></label>'; }
+  return '<div class="box"><label class="sw"><input type="checkbox" data-f="_nutOpen"'+(f._nutOpen?' checked':'')+'><i></i><span style="color:var(--ink);font-size:13.5px">КБЖУ своими цифрами</span></label>'+
+    '<p class="muted" style="margin:6px 0 0">'+(a?'Сейчас считаем автоматически: <b>'+esc(Nutrition.line(a))+'</b>, омега-3 '+Nutrition.num(a.o3)+' г, съедобная часть '+Math.round(a.yield*100)+'%. ':'')+'Включите, если есть данные с упаковки — покажем их в карточке и в расчёте пользы.</p>'+
+    (f._nutOpen?'<div class="row2" style="margin-top:8px">'+inp('kcal','Ккал на 100 г',a?a.kcal:'')+inp('p','Белки, г',a?a.p:'')+inp('f','Жиры, г',a?a.f:'')+inp('c','Углеводы, г',a?a.c:'')+inp('o3','Омега-3, г',a?a.o3:'')+inp('yield','Съедобная часть, %',a?Math.round(a.yield*100):'100')+'</div><p class="muted" style="margin:0">Пустое поле «Ккал» — вернуться к автоматическому расчёту.</p>':'')+
+  '</div>';
+}
 $('pan').addEventListener('input',function(e){
-  if(!F) return; var k=e.target.dataset.f; if(!k) return;
-  if(k==='_sale'||k==='_instock') return;
+  if(!F) return;
+  if(e.target.dataset.nut){ F._nut[e.target.dataset.nut]=e.target.value; return; }
+  var k=e.target.dataset.f; if(!k) return;
+  if(k==='_sale'||k==='_instock'||k==='_nutOpen') return;
   F[k]=e.target.value; $('pv').innerHTML=previewText();
 });
 $('pan').addEventListener('change',function(e){
   if(!F) return; var t=e.target;
   if(t.name==='mode'){ F._mode=t.value; if(t.value!=='piece') F.piece_g=0; if(t.value!=='weight') F.min_g=0; return drawProduct(); }
   if(t.dataset.f==='_sale'){ F._sale=t.checked; return drawProduct(); }
+  if(t.dataset.f==='_nutOpen'){ F._nutOpen=t.checked; if(!t.checked) F._nut={}; return drawProduct(); }
+  if(t.dataset.nut) return;
   if(t.dataset.f==='_instock'){ F.out=t.checked?0:1; $('pv').innerHTML=previewText(); return; }
   if(t.dataset.f){ F[t.dataset.f]=t.value; $('pv').innerHTML=previewText(); }
 });

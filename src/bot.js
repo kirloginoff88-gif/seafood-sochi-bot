@@ -14,6 +14,7 @@ const config = require('./config');
 const loyalty = require('./loyalty');
 const branding = require('./branding');
 const Z = require('./shared/zones');
+const N = require('./shared/nutrition');
 const { esc } = orders;
 
 const PAGE = 10;
@@ -150,6 +151,9 @@ function cardView(u, id) {
   lines.push('', `Количество: <b>${P.qtyLabel(p, q)}</b> · ${P.approx(p) ? '≈ ' : ''}${P.rub(P.lineSum(p, q))}`);
   if (P.approx(p)) lines.push('<i>Точный вес и сумму подтвердит менеджер.</i>');
   if (inCart) lines.push(`🛒 В корзине: ${P.qtyLabel(p, inCart)}`);
+  const n = N.of(p);
+  lines.push('', `🥗 <b>На 100 г:</b> ${N.line(n)}${n.o3 >= 0.3 ? ` · омега-3 ${N.num(n.o3)} г` : ''}`);
+  if (n.tags.length) lines.push(`<i>${n.tags.slice(0, 3).join(' · ')}</i>`);
   const addText = inCart ? (inCart === q ? '✓ В корзине' : '🔄 Обновить в корзине') : '🛒 В корзину';
   return {
     text: lines.join('\n'),
@@ -173,12 +177,23 @@ function cartView(u) {
     `<b>Примерно: ${P.rub(s.sum)}</b>`,
     s.weighed ? '<i>Весовой товар взвешиваем при сборке, итог подтвердит менеджер.</i>' : '',
     low ? `\n⚠️ Минимальный заказ ${P.rub(min)}. Добавьте ещё на ${P.rub(min - s.sum)}.` : '',
+    benefitText(s.lines),
   ].filter(Boolean).join('\n');
   const rows = [];
   if (!low) rows.push([{ text: '✅ Оформить заказ', cb: 'co' }]);
   rows.push(...s.lines.slice(0, 15).map(l => [{ text: `✎ ${l.name} · ${l.qtyLabel}`, cb: `p:${l.id}` }]));
   rows.push([{ text: '🐟 Продолжить покупки', cb: 'cats' }, { text: '🗑 Очистить', cb: 'clr' }]);
   return { text, buttons: rows };
+}
+
+// Что получит покупатель: белок, омега-3, витамины (справочно)
+function benefitText(lines) {
+  const b = N.order(lines, catalog.get().byId);
+  if (!b.counted || b.p < 5) return '';
+  const parts = [`💪 Белок: <b>${b.p} г</b> — ≈ ${N.num(b.proteinDays)} суточных нормы`];
+  if (b.o3 >= 0.5) parts.push(`🐟 Омега-3: <b>${N.num(b.o3)} г</b> — норма на ≈ ${b.omegaDays} ${P.plural(b.omegaDays, 'день', 'дня', 'дней')}`);
+  if (b.micro.length) parts.push(`✨ Источник: ${b.micro.join(', ')}`);
+  return `\n<b>🥗 Польза вашего заказа</b>\n${parts.join('\n')}\n<i>≈ ${b.portions} ${P.plural(b.portions, 'порция', 'порции', 'порций')} по 150 г · ${b.kcal} ккал всего. Справочные данные.</i>`;
 }
 
 function zonesText() {

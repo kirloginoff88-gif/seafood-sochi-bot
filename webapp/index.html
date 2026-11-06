@@ -143,7 +143,7 @@ img{display:block;max-width:100%}
 .step button{width:36px;height:36px;color:var(--sea);font-size:20px;font-weight:800;line-height:1;flex:0 0 auto}
 .step span{flex:1;text-align:center;font-size:13px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap}
 .step.sm{width:auto;min-width:120px}
-.hot .pc{flex:0 0 150px;scroll-snap-align:start}
+.hot .pc,#s-fit .pc{flex:0 0 150px;scroll-snap-align:start}
 .empty{padding:40px 16px;text-align:center;color:var(--muted)}
 .note{font-size:12.5px;color:var(--muted);padding:18px 16px 0}
 
@@ -187,6 +187,28 @@ img{display:block;max-width:100%}
 .tot.big b{font-size:16px;color:var(--ink);font-weight:800}
 .tot.big strong{font-size:26px}
 .tot.bon strong{color:var(--ok)}
+.nb{position:absolute;left:6px;bottom:6px;z-index:1;background:rgba(255,255,255,.92);color:#0A5E66;font-size:10.5px;font-weight:800;border-radius:8px;padding:2px 6px;line-height:1.4}
+:root[data-theme="dark"] .nb{background:rgba(13,23,29,.85);color:#7FD3DA}
+.nut{margin-top:14px;background:var(--sea-soft);border-radius:14px;padding:12px 14px}
+.nut h4{margin:0 0 8px;font-size:13px;color:var(--sea2)}
+:root[data-theme="dark"] .nut h4{color:var(--sea)}
+.nut .g{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;text-align:center}
+.nut .g div{background:var(--card);border-radius:10px;padding:7px 2px}
+.nut .g b{display:block;font-size:16px;color:var(--ink);font-variant-numeric:tabular-nums}
+.nut .g small{font-size:11px;color:var(--muted)}
+.nut .tg{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}
+.nut .tg span{font-size:11.5px;font-weight:700;background:var(--card);color:var(--sea2);border-radius:999px;padding:3px 9px}
+:root[data-theme="dark"] .nut .tg span{color:var(--sea)}
+.nut p{margin:8px 0 0;font-size:12px;color:var(--body)}
+.nut .src{font-size:11px;color:var(--muted)}
+.hb{margin-top:14px;background:var(--sea-soft);border-radius:14px;padding:12px 14px;text-align:left}
+.hb h4{margin:0 0 8px;font-size:14px;color:var(--ink)}
+.hb .r{display:flex;gap:10px;align-items:flex-start;margin:6px 0;font-size:13px;color:var(--body)}
+.hb .r i{font-style:normal;font-size:18px;line-height:1.1}
+.hb .r b{color:var(--ink)}
+.hb .bar{height:6px;background:var(--card);border-radius:4px;margin-top:4px;overflow:hidden}
+.hb .bar u{display:block;height:100%;background:var(--sea);border-radius:4px}
+.hb .src{font-size:11px;color:var(--muted);margin-top:6px}
 .warn{background:var(--coral-soft);color:var(--coral2);font-weight:600;font-size:13px;border-radius:12px;padding:10px 12px;margin-top:10px}
 .muted{font-size:12.5px;color:var(--muted);margin:6px 2px}
 .link{color:var(--sea);font-weight:700;font-size:13.5px;padding:10px 2px}
@@ -338,6 +360,7 @@ img{display:block;max-width:100%}
 
 <script src="pricing.js"></script>
 <script src="../static/zones.js"></script>
+<script src="../static/nutrition.js"></script>
 <script>
 (function(){
 'use strict';
@@ -397,6 +420,30 @@ function list(){ return DATA.products; }
 function shown(p){ if(!query) return true; var n=(p.fullName+' '+p.note).toLowerCase().replace(/ё/g,'е'); return n.indexOf(query)!==-1; }
 function catOf(p){ return DATA.cats.find(function(x){return x.cid===p.cid;}); }
 function emojiOf(p){ var c=catOf(p); return c?c.emoji:'🐟'; }
+/* ---------- КБЖУ ---------- */
+var NUT={};
+function nutOf(p){ if(!window.Nutrition) return null; return NUT[p.id] || (NUT[p.id]=Nutrition.of(p)); }
+function healthy(p){ var n=nutOf(p); return n && !P.isAsk(p) && !n.label && n.kcal<=300 && (n.p>=18 && n.f<=5 || n.o3>=1); } // без солёного, копчёного и вяленого
+function nutHtml(p){
+  var n=nutOf(p); if(!n) return '';
+  var nm=Nutrition.num;
+  return '<div class="nut"><h4>🥗 Пищевая ценность на 100 г'+(n.label?' · '+esc(n.label):'')+'</h4><div class="g">'+
+    '<div><b>'+n.kcal+'</b><small>ккал</small></div><div><b>'+nm(n.p)+'</b><small>белки, г</small></div><div><b>'+nm(n.f)+'</b><small>жиры, г</small></div><div><b>'+nm(n.c)+'</b><small>углев., г</small></div></div>'+
+    (n.tags.length?'<div class="tg">'+n.tags.map(function(t){return '<span>'+esc(t)+'</span>';}).join('')+'</div>':'')+
+    '<p>🐟 Омега-3: <b>'+nm(n.o3)+' г</b>'+(n.o3>=0.25?' — '+Math.round(n.o3/Nutrition.DAILY.o3*100)+'% дневной нормы в 100 г':'')+' · ✨ '+esc(n.micro.join(', '))+'</p>'+
+    '<p class="src">'+(n.custom?'Данные производителя.':'Справочные средние значения, ±15%.')+'</p></div>';
+}
+function benefit(lines){ return window.Nutrition ? Nutrition.order(lines.map(function(l){return {id:l.id,qty:l.qty};}), BY) : null; }
+function benefitHtml(b){
+  if(!b || !b.counted || b.p<5) return '';
+  var nm=Nutrition.num, pd=Math.min(100,Math.round(b.proteinDays*100/Math.max(1,Math.ceil(b.proteinDays))));
+  return '<div class="hb"><h4>🥗 Польза вашего заказа</h4>'+
+    '<div class="r"><i>💪</i><div style="flex:1"><b>'+b.p+' г белка</b> — ≈ '+nm(b.proteinDays)+' '+P.plural(Math.ceil(b.proteinDays),'суточная норма','суточные нормы','суточных норм')+'<div class="bar"><u style="width:'+pd+'%"></u></div></div></div>'+
+    (b.o3>=0.5?'<div class="r"><i>🐟</i><div><b>'+nm(b.o3)+' г омега-3</b> — норма на ≈ '+b.omegaDays+' '+P.plural(b.omegaDays,'день','дня','дней')+'</div></div>':'')+
+    (b.micro.length?'<div class="r"><i>✨</i><div>Источник: '+esc(b.micro.join(', '))+'</div></div>':'')+
+    '<div class="r"><i>🍽</i><div>≈ '+b.portions+' '+P.plural(b.portions,'порция','порции','порций')+' по 150 г · '+P.ru(b.kcal)+' ккал всего</div></div>'+
+    '<div class="src">Справочный расчёт по съедобной части. Норма: белок 75 г, омега-3 0,5 г в день.</div></div>';
+}
 
 function priceHtml(p){
   if(P.isAsk(p)) return '<div class="pr">по запросу</div>';
@@ -411,9 +458,10 @@ function ctlHtml(p, sm){
   if(!q) return '<button class="add" data-add="'+p.id+'">В корзину</button>';
   return '<div class="step'+(sm?' sm':'')+'"><button data-dec="'+p.id+'" aria-label="Меньше">−</button><span>'+P.qtyLabel(p,q)+'</span><button data-inc="'+p.id+'" aria-label="Больше">+</button></div>';
 }
+function nbHtml(p){ var n=nutOf(p); return n&&!P.isAsk(p) ? '<span class="nb">Б '+Math.round(n.p)+' г · '+n.kcal+' ккал</span>' : ''; }
 function photo(p){
-  if(!p.thumb) return '<div class="ph">'+emojiOf(p)+'</div>';
-  return '<div class="ph"><img src="'+esc(p.thumb)+'" alt="" loading="lazy" data-full="'+esc(p.image)+'" data-emoji="'+emojiOf(p)+'"></div>';
+  if(!p.thumb) return '<div class="ph">'+emojiOf(p)+nbHtml(p)+'</div>';
+  return '<div class="ph"><img src="'+esc(p.thumb)+'" alt="" loading="lazy" data-full="'+esc(p.image)+'" data-emoji="'+emojiOf(p)+'">'+nbHtml(p)+'</div>';
 }
 function cardHtml(p){
   var sale = P.onSale(p);
@@ -481,6 +529,8 @@ function renderShop(){
       var minFree=DATA.zones.reduce(function(m,z){ return +z.free_from>0 ? Math.min(m,+z.free_from) : m; }, Infinity);
       html+='<button class="bonusband dl" data-go="delivery"><span class="ic">🚚</span><div><b>Доставка по зонам</b><small>'+(isFinite(minFree)?'Бесплатно от '+P.rub(minFree)+' · ':'')+'проверьте свой адрес на карте</small></div><span class="ar">›</span></button>';
     }
+    var seen={}, fit=list().filter(healthy).sort(function(a,b){ var x=nutOf(a), y=nutOf(b); return (y.p/y.kcal*100+y.o3*8)-(x.p/x.kcal*100+x.o3*8); }).filter(function(p){ var k=p.name.toLowerCase(), w=k.split(' ')[0]; if(seen[k]||(seen[w]=(seen[w]||0)+1)>2) return false; return seen[k]=true; }).slice(0,10);
+    if(fit.length) html+='<section class="blk" id="s-fit"><h2>💪 Для ЗОЖ <span style="font-size:12px;color:var(--muted);font-weight:600">белок и омега-3</span></h2><div class="hscroll">'+fit.map(cardHtml).join('')+'</div></section>';
     if(sales.length) html+='<section class="blk hot"><h2>🔥 Скидки недели <button data-tab="sale">Все</button></h2><div class="hscroll">'+sales.map(cardHtml).join('')+'</div></section>';
   }
   var any=false;
@@ -495,7 +545,7 @@ function renderShop(){
   startCarousel();
 }
 function renderPills(){
-  $('pills').innerHTML=DATA.cats.map(function(c){ return '<button class="pill" data-jump="'+c.cid+'">'+c.emoji+' '+esc(c.name)+'</button>'; }).join('');
+  $('pills').innerHTML=(window.Nutrition&&list().some(healthy)?'<button class="pill" data-jump="fit">💪 ЗОЖ</button>':'')+DATA.cats.map(function(c){ return '<button class="pill" data-jump="'+c.cid+'">'+c.emoji+' '+esc(c.name)+'</button>'; }).join('');
 }
 function jump(cid){
   if(screen!=='shop') go('shop');
@@ -564,6 +614,7 @@ function renderCart(){
     (t.weighed?'<p class="muted">Весовой товар взвешиваем при сборке, итоговую сумму подтвердит менеджер.</p>':'')+
     (b?'<p class="muted" style="color:var(--sea);font-weight:700">💎 Можно оплатить бонусами до '+P.rub(b)+' — на следующем шаге</p>':'')+
     (ACC&&ACC.bonus.cashback?'<p class="muted">После доставки вернём ≈ '+Math.floor(t.sum*ACC.bonus.cashback/100)+' бонусов</p>':'')+
+    benefitHtml(benefit(t.lines))+
     (min&&t.sum<min?'<div class="warn">Минимальный заказ '+P.rub(min)+'. Добавьте ещё на '+P.rub(min-t.sum)+'.</div>':'')+
     '<button class="link" data-go="shop">← Добавить ещё</button> <button class="link" data-clear style="color:var(--muted)">Очистить</button>';
   renderBar();
@@ -587,7 +638,7 @@ function renderForm(){
     '<div class="f"><label>Когда доставить</label><div class="chips">'+s.timeSlots.map(function(t){return '<button type="button" class="chip'+(t===form.time?' on':'')+'" data-time="'+esc(t)+'">'+esc(t)+'</button>';}).join('')+'</div></div>'+
     '<div class="f"><label>Оплата при получении</label><div class="chips">'+s.payments.map(function(t){return '<button type="button" class="chip'+(t===form.pay?' on':'')+'" data-pay="'+esc(t)+'">'+esc(t)+'</button>';}).join('')+'</div></div>'+
     '<div class="f"><label for="f-comment">Комментарий</label><textarea id="f-comment" placeholder="Например: разделать форель на стейки">'+esc(form.comment||'')+'</textarea></div>'+
-    '<div class="card" style="padding:10px 14px" id="sumBox"></div>'+
+    '<div class="card" style="padding:10px 14px" id="sumBox"></div>'+benefitHtml(benefit(t.lines))+
     '<p class="muted">'+esc(s.settings.delivery||'')+' Менеджер позвонит, подтвердит вес и итог до отправки.</p>'+
     '<div class="warn" id="formErr" hidden></div>';
   ['name','phone','address','comment'].forEach(function(k){ var el=$('f-'+k); el.addEventListener('input',function(){ form[k]=el.value; var e=$('e-'+k); if(e) e.textContent=''; if(k==='address') addressChanged(); }); });
@@ -737,7 +788,7 @@ function submit(){
   if(!bad && hasZones() && DATA.zoneStrict && form.geo && !zoneAt(form.geo)){ $('e-address').textContent='Этот адрес вне зон доставки'; bad=true; }
   if(bad){ haptic('error'); return; }
   sending=true; $('barBtn').disabled=true; $('barGo').textContent='Отправляем…';
-  var sum=totals().sum;
+  var sum=totals().sum, hb=benefit(totals().lines);
   api('POST','api/order',{ cart:cart, order:{ name:form.name, phone:form.phone, address:form.address, time:form.time, pay:form.pay, comment:form.comment||'', useBonus:!!form.useBonus, geo:form.geo||null } })
     .then(function(r){
       sending=false;
@@ -749,6 +800,7 @@ function submit(){
         (r.delivery&&r.delivery.name?'<p style="font-weight:700;color:var(--ink)">🚚 '+esc(r.delivery.name)+': доставка '+(r.delivery.price?P.rub(r.delivery.price):'бесплатно')+'</p>':'')+
         (r.bonusUsed||(r.delivery&&r.delivery.price)?'<p style="font-weight:700;color:var(--ink)">К оплате ≈ '+P.rub(r.toPay)+'</p>':'')+
         (earn?'<div class="earn">+'+earn+' бонусов придут после доставки</div><br>':'')+
+        (hb&&hb.counted&&hb.p>=5?'<div style="max-width:420px;margin:0 auto 18px">'+benefitHtml(hb)+'</div>':'')+
         (WA&&WA.close?'<button class="btn" data-closeapp>Вернуться в чат</button> ':'')+'<button class="btn alt" data-go="shop">В каталог</button></div>';
       go('done'); haptic('success'); refreshAccount();
     })
@@ -853,7 +905,7 @@ function openCard(id, keep){
     '<div class="row"><div>'+price+(hint?'<div class="hint" style="font-size:12px">'+esc(hint)+'</div>':'')+'</div><div data-ctl="'+p.id+'" data-sm="1">'+ctlHtml(p,true)+'</div></div>'+
     (q?'<p class="muted" style="margin-top:12px">В корзине: '+P.qtyLabel(p,q)+' · '+(P.approx(p)?'≈ ':'')+P.rub(P.lineSum(p,q))+'</p>':'')+
     (P.approx(p)?'<p class="muted" style="margin-top:8px">Цена за кг. Точный вес и сумму подтвердит менеджер.</p>':'')+
-    (ACC&&ACC.bonus.cashback&&!P.isAsk(p)?'<p class="muted" style="margin-top:8px">💎 Вернём '+ACC.bonus.cashback+'% бонусами после доставки</p>':'')+'</div>';
+    (ACC&&ACC.bonus.cashback&&!P.isAsk(p)?'<p class="muted" style="margin-top:8px">💎 Вернём '+ACC.bonus.cashback+'% бонусами после доставки</p>':'')+nutHtml(p)+'</div>';
   if(!keep){ $('sheet').hidden=false; showBack(true); }
 }
 function closeCard(){ $('sheet').hidden=true; showBack(screen!=='shop'); }

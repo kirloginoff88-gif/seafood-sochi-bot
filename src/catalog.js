@@ -100,6 +100,13 @@ async function dropImage(src) {
   if (!used) await media.remove(src).catch(() => {});
 }
 
+// КБЖУ на 100 г, заданные вручную (пусто — считаем по справочнику)
+function cleanNut(n) {
+  if (!n || !(+n.kcal > 0)) return null;
+  const num = (v, max) => Math.max(0, Math.min(max, Math.round((+String(v ?? '').replace(',', '.') || 0) * 10) / 10));
+  return { kcal: num(n.kcal, 1000), p: num(n.p, 100), f: num(n.f, 100), c: num(n.c, 100), o3: num(n.o3, 50), yield: num(n.yield, 100) };
+}
+
 async function saveProduct(input) {
   await sync();
   const isNew = !input.id;
@@ -120,7 +127,9 @@ async function saveProduct(input) {
     sale_price: int(input.sale_price, 0, 10_000_000),
     sale_from: str(input.sale_from, 10),
     sale_to: str(input.sale_to, 10),
+    nut: cleanNut(input.nut),
   };
+  if (!p.nut) delete p.nut;
   if (!raw.cats.some(c => c.cid === p.cid)) fail('Выберите категорию');
   if (!p.name) fail('Укажите название');
   if (p.unit === 'шт') { p.piece_g = 0; p.min_g = 0; }
@@ -137,7 +146,7 @@ async function saveProduct(input) {
 
   const pricesChanged = !old || old.price !== p.price || old.sale_price !== p.sale_price;
   const prevImage = old ? old.image : '';
-  if (old) Object.assign(old, p); else raw.products.push(p);
+  if (old) { Object.assign(old, p); if (!p.nut) delete old.nut; } else raw.products.push(p);
   if (prevImage && prevImage !== p.image) await dropImage(prevImage);
   await commit({ prices: pricesChanged });
   return state.byId[p.id];

@@ -21,6 +21,7 @@ const STATIC = {
   'index.html': ['text/html; charset=utf-8', () => fs.readFileSync(path.join(__dirname, '..', 'webapp', 'index.html'))],
   'admin.html': ['text/html; charset=utf-8', () => fs.readFileSync(path.join(__dirname, '..', 'webapp', 'admin.html'))],
   'pricing.js': ['text/javascript; charset=utf-8', () => fs.readFileSync(path.join(__dirname, 'shared', 'pricing.js'))],
+  'nutrition.js': ['text/javascript; charset=utf-8', () => fs.readFileSync(path.join(__dirname, 'shared', 'nutrition.js'))],
   'zones.js': ['text/javascript; charset=utf-8', () => fs.readFileSync(path.join(__dirname, 'shared', 'zones.js'))],
   'leaflet.js': ['text/javascript; charset=utf-8', () => fs.readFileSync(path.join(__dirname, '..', 'webapp', 'vendor', 'leaflet.js'))],
   'leaflet.css': ['text/css; charset=utf-8', () => fs.readFileSync(path.join(__dirname, '..', 'webapp', 'vendor', 'leaflet.css'))],
@@ -54,7 +55,7 @@ function publicCatalog() {
   const s = c.settings;
   return {
     cats: c.cats.filter(x => x.count > 0).map(({ cid, name, emoji, image, count }) => ({ cid, name, emoji, image, count })),
-    products: c.products.filter(p => !p.out).map(p => ({ id: p.id, cid: p.cid, name: p.name, fullName: catalog.fullName(p), note: p.note, price: p.price, unit: p.unit, piece_g: p.piece_g, min_g: p.min_g, sale_price: p.sale_price, sale_from: p.sale_from, sale_to: p.sale_to, image: p.image, thumb: p.thumb })),
+    products: c.products.filter(p => !p.out).map(p => ({ id: p.id, cid: p.cid, name: p.name, fullName: catalog.fullName(p), note: p.note, price: p.price, unit: p.unit, piece_g: p.piece_g, min_g: p.min_g, sale_price: p.sale_price, sale_from: p.sale_from, sale_to: p.sale_to, image: p.image, thumb: p.thumb, nut: p.nut })),
     settings: { brand: s.brand, phone_tel: s.phone_tel, phone_wa: s.phone_wa, hours: s.hours, delivery: s.delivery, payment: s.payment, price_date: s.price_date, min_order: +s.min_order || 0 },
     promos: catalog.livePromos().map(x => ({ id: x.id, title: x.title, text: x.text, badge: x.badge, image: x.image, btn: x.btn, link_type: x.link_type, link_id: x.link_id, color: x.color, to: x.to, popup: x.popup })),
     bonus: loyalty.cfg(),
