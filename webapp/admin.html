@@ -236,6 +236,34 @@ label.f small{font-weight:500;color:var(--muted)}
   .row2{grid-template-columns:1fr}
   .hd small{display:none}
 }
+.ml{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;align-items:start}
+@media (max-width:900px){.ml{grid-template-columns:1fr}}
+.ml h3{font-size:15px}
+.seg{display:flex;flex-wrap:wrap;gap:6px}
+.aud{background:var(--sea-soft);border-radius:12px;padding:12px 14px}
+.aud b.big{font-size:26px;color:var(--ink);font-variant-numeric:tabular-nums}
+.aud .muted{margin-top:2px}
+.picks{max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+.picks label{display:flex;gap:9px;align-items:center;padding:7px 10px;border-bottom:1px solid var(--line);font-size:13.5px;cursor:pointer}
+.picks label:last-child{border-bottom:0}
+.picks small{color:var(--muted);margin-left:auto;white-space:nowrap}
+.phone{background:#8FB3C6;border-radius:18px;padding:14px;position:sticky;top:12px}
+@media (prefers-color-scheme:dark){.phone{background:#1D3341}}
+.bub{background:#fff;color:#0E1C26;border-radius:14px 14px 14px 4px;overflow:hidden;font-size:14px;line-height:1.4;box-shadow:0 1px 2px rgba(0,0,0,.15)}
+.bub img{display:block;width:100%;max-height:220px;object-fit:cover}
+.bub .tx{padding:9px 12px;white-space:pre-wrap;word-break:break-word}
+.bub .tx b{color:inherit}
+.kb{display:flex;flex-direction:column;gap:4px;margin-top:5px}
+.kb span{display:block;text-align:center;background:rgba(255,255,255,.55);color:#0E1C26;border-radius:9px;padding:8px;font-size:13px;font-weight:700}
+.hints{display:flex;flex-wrap:wrap;gap:6px}
+.hints button{font-size:12px;font-weight:700;border:1px dashed var(--line);border-radius:8px;padding:3px 8px;color:var(--sea)}
+.job{padding:11px 12px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:6px}
+.job:last-child{border-bottom:0}
+.job .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.job .tx{font-size:13px;color:var(--body);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prog{height:6px;background:var(--soft);border-radius:4px;overflow:hidden}
+.prog u{display:block;height:100%;background:var(--sea)}
+.pill.sending{background:var(--sea);color:var(--sea-ink)}.pill.stopped{background:var(--soft);color:var(--muted)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 <link rel="stylesheet" href="/static/leaflet.css">
@@ -263,6 +291,7 @@ label.f small{font-weight:500;color:var(--muted)}
         <button class="tab" data-tab="promos" type="button">Акции</button>
         <button class="tab" data-tab="zones" type="button">Доставка</button>
         <button class="tab" data-tab="customers" type="button">Покупатели</button>
+        <button class="tab" data-tab="mail" type="button">Рассылки<span class="n" id="mailLive" hidden>●</span></button>
         <button class="tab" data-tab="settings" type="button">Настройки</button>
       </nav>
     </div>
@@ -274,6 +303,7 @@ label.f small{font-weight:500;color:var(--muted)}
     <section id="t-promos" hidden></section>
     <section id="t-zones" hidden></section>
     <section id="t-customers" hidden></section>
+    <section id="t-mail" hidden></section>
     <section id="t-settings" hidden></section>
   </main>
 </div>
@@ -322,10 +352,10 @@ $('tabs').addEventListener('click',function(e){
   var b=e.target.closest('[data-tab]'); if(!b) return;
   ui.tab=b.dataset.tab;
   document.querySelectorAll('.tab').forEach(function(t){t.classList.toggle('on',t===b);});
-  ['products','cats','orders','promos','zones','customers','settings'].forEach(function(t){ $('t-'+t).hidden=t!==ui.tab; });
+  ['products','cats','orders','promos','zones','customers','mail','settings'].forEach(function(t){ $('t-'+t).hidden=t!==ui.tab; });
   render();
 });
-function render(){ ({products:renderProducts,cats:renderCats,orders:loadOrders,promos:renderPromos,zones:renderZones,customers:loadCustomers,settings:renderSettings})[ui.tab](); $('brand').textContent=S.settings.brand||'Seafood Сочи'; }
+function render(){ ({products:renderProducts,cats:renderCats,orders:loadOrders,promos:renderPromos,zones:renderZones,customers:loadCustomers,mail:loadMail,settings:renderSettings})[ui.tab](); $('brand').textContent=S.settings.brand||'Seafood Сочи'; }
 
 /* ---------- товары ---------- */
 function unitLabel(p){ return p.unit==='кг' ? '₽/кг' : '₽/шт'; }
@@ -781,6 +811,129 @@ function renderCustomers(){
 }
 document.addEventListener('input',function(e){ if(e.target.id==='cq'){ cq=e.target.value.trim().toLowerCase(); renderCustomers(); } });
 
+
+/* ---------- рассылки ---------- */
+var MAIL={ seg:{platform:'all',kind:'all',days:30,minBonus:100,minOrders:2,keys:[]}, msg:{text:'',image:'',button:'shop',buttonText:'',productId:0}, aud:null, prev:null, jobs:[], kinds:{}, buttons:{}, pq:'', sure:false };
+var mailTimer=null, prevTimer=null;
+function loadMail(){
+  if(!MAIL.kinds.all) $('t-mail').innerHTML='<div class="empty">Загружаем…</div>';
+  api('broadcasts').then(function(j){ MAIL.jobs=j.broadcasts; MAIL.kinds=j.kinds; MAIL.buttons=j.buttons; renderMail(); preview(); pollMail(); }).catch(fail);
+}
+function pollMail(){
+  clearTimeout(mailTimer);
+  var live=MAIL.jobs.some(function(x){return x.status==='sending';});
+  $('mailLive').hidden=!live;
+  if(!live) return;
+  mailTimer=setTimeout(function(){ api('broadcasts').then(function(j){ MAIL.jobs=j.broadcasts; if(ui.tab==='mail') drawJobs(); pollMail(); }).catch(function(){ pollMail(); }); }, 2500);
+}
+var NEEDS={ repeat:['minOrders','Сколько заказов минимум'], sleeping:['days','Не заказывали дней'], bonus:['minBonus','Бонусов на счёте от'], 'new':['days','Открыли бота за дней'] };
+function renderMail(){
+  var s=MAIL.seg, m=MAIL.msg, need=NEEDS[s.kind];
+  var kinds=Object.keys(MAIL.kinds).map(function(k){ return '<option value="'+k+'"'+(s.kind===k?' selected':'')+'>'+esc(MAIL.kinds[k].replace(/ \(.*N.*\)/,''))+'</option>'; }).join('');
+  var btns=Object.keys(MAIL.buttons).concat('product').map(function(k){ return '<option value="'+k+'"'+(m.button===k?' selected':'')+'>'+esc(k==='product'?'🐟 Карточка товара':MAIL.buttons[k])+'</option>'; }).join('');
+  var prods=S.products.filter(function(p){return !p.out;}).map(function(p){ return '<option value="'+p.id+'"'+(+m.productId===p.id?' selected':'')+'>'+esc(p.name+(p.note?' · '+p.note:''))+'</option>'; }).join('');
+  var h='<div class="ml"><div style="display:flex;flex-direction:column;gap:16px">'+
+    '<div class="form" style="max-width:none"><h3>1. Кому</h3>'+
+      '<div class="seg">'+[['all','Все мессенджеры'],['tg','Telegram'],['max','MAX']].map(function(x){ return '<button type="button" class="chip'+(s.platform===x[0]?' on':'')+'" data-mpl="'+x[0]+'">'+x[1]+'</button>'; }).join('')+'</div>'+
+      '<div class="row2"><label class="f">Сегмент<select class="in" data-ms="kind">'+kinds+'</select></label>'+
+        (need?'<label class="f">'+need[1]+'<input class="in" type="number" min="1" inputmode="numeric" data-ms="'+need[0]+'" value="'+esc(s[need[0]])+'"></label>':'<span></span>')+'</div>'+
+      (s.kind==='manual'?pickHtml():'')+
+      '<div class="aud" id="aud"></div>'+
+    '</div>'+
+    '<div class="form" style="max-width:none"><h3>2. Сообщение</h3>'+
+      '<label class="f">Текст <small>до 3500 символов, с картинкой — до 1000</small><textarea class="in" rows="7" id="mtext" maxlength="3500" placeholder="Например: {name}, сегодня привезли свежую форель! Скидка 15% до воскресенья.">'+esc(m.text)+'</textarea></label>'+
+      '<div class="hints"><button type="button" data-mins="{name}">+ имя</button><button type="button" data-mins="{bonus}">+ бонусы на счёте</button><button type="button" data-mins="**жирный**">+ **жирный**</button></div>'+
+      '<div class="toolbar" style="margin:0"><button class="btn ghost sm" type="button" data-mimg>'+(m.image?'Заменить картинку':'Добавить картинку')+'</button>'+(m.image?'<button class="btn danger sm" type="button" data-mimgdel>Убрать картинку</button>':'')+'</div>'+
+      '<div class="row2"><label class="f">Кнопка под сообщением<select class="in" data-mm="button">'+btns+'</select></label>'+
+        '<label class="f">Текст кнопки <small>необязательно</small><input class="in" maxlength="40" data-mm="buttonText" value="'+esc(m.buttonText)+'" placeholder="как в списке"></label></div>'+
+      (m.button==='product'?'<label class="f">Товар<select class="in" data-mm="productId"><option value="0">— выберите —</option>'+prods+'</select></label>':'')+
+      '<p class="muted">Под каждым сообщением будет кнопка «Не присылать рассылки». Тем, кто отписался или заблокировал бота, не пишем.</p>'+
+      '<div class="toolbar" style="margin:0"><button class="btn ghost" type="button" data-mtest>Прислать тест менеджерам</button><button class="btn'+(MAIL.sure?' danger sure':'')+'" type="button" data-msend id="msend">Отправить</button></div>'+
+    '</div>'+
+    '<div><h3 style="margin:0 2px 8px">История рассылок</h3><div class="list" id="jobs"></div></div>'+
+  '</div><div class="phone"><div id="mprev"></div></div></div>';
+  $('t-mail').innerHTML=h;
+  drawAud(); drawPreview(); drawJobs();
+}
+function pickHtml(){
+  if(!MAIL.aud){ api('broadcast/audience',{}).then(function(j){ MAIL.aud=j.audience; if(ui.tab==='mail') renderMail(); }).catch(fail); return '<p class="muted">Загружаем покупателей…</p>'; }
+  var sel={}; MAIL.seg.keys.forEach(function(k){sel[k]=1;});
+  var list=MAIL.aud.filter(function(c){ if(MAIL.seg.platform!=='all'&&c.platform!==MAIL.seg.platform) return false; if(!MAIL.pq) return true; return (c.name+' '+c.username).toLowerCase().indexOf(MAIL.pq)!==-1; });
+  return '<div class="toolbar" style="margin:0"><input class="in" type="search" id="mpq" placeholder="Поиск по имени или @нику" value="'+esc(MAIL.pq)+'"><button class="btn ghost sm" type="button" data-mpall>Отметить найденных</button><button class="btn ghost sm" type="button" data-mpnone>Снять все</button></div>'+
+    '<div class="picks">'+(list.length?list.slice(0,500).map(function(c){ return '<label><input type="checkbox" data-mpk="'+esc(c.key)+'"'+(sel[c.key]?' checked':'')+(c.noNews||c.blocked?' disabled':'')+'><span>'+esc(c.name||'Без имени')+(c.username?' <span class="muted">@'+esc(c.username)+'</span>':'')+'</span><small>'+(c.platform==='tg'?'TG':'MAX')+' · заказов '+c.orders+(c.noNews?' · отписан':'')+(c.blocked?' · заблокировал':'')+'</small></label>'; }).join(''):'<p class="muted" style="padding:10px">Никого не нашли</p>')+'</div>';
+}
+function preview(){
+  clearTimeout(prevTimer);
+  prevTimer=setTimeout(function(){ api('broadcast/preview',{segment:MAIL.seg}).then(function(j){ MAIL.prev=j; drawAud(); }).catch(fail); }, 250);
+}
+function drawAud(){
+  var el=$('aud'); if(!el) return; var p=MAIL.prev;
+  if(!p){ el.innerHTML='<span class="muted">Считаем…</span>'; return; }
+  var ex=[]; if(p.unsub) ex.push('отписались: '+p.unsub); if(p.blocked) ex.push('заблокировали бота: '+p.blocked);
+  el.innerHTML='<b class="big">'+p.count+'</b> '+P.plural(p.count,'получатель','получателя','получателей')+
+    '<div class="muted">Telegram: '+p.byPlatform.tg+' · MAX: '+p.byPlatform.max+' · всего в базе: '+p.total+(ex.length?' · не получат — '+ex.join(', '):'')+'</div>'+
+    (p.sample.length?'<div class="muted" style="margin-top:6px">Например: '+p.sample.map(function(c){return esc(c.name||('@'+c.username)||'без имени');}).join(', ')+(p.count>p.sample.length?' и другие':'')+'</div>':'');
+  var b=$('msend'); if(b){ b.disabled=!p.count; b.textContent=MAIL.sure?'Точно отправить '+p.count+'?':'Отправить '+p.count+' '+P.plural(p.count,'получателю','получателям','получателям'); }
+}
+function fmtMsg(t){ return esc(t).replace(/\{name\}/g,'Анна').replace(/\{bonus\}/g,'350').replace(/\*\*([^*\n]+)\*\*/g,'<b>$1</b>'); }
+function drawPreview(){
+  var el=$('mprev'); if(!el) return; var m=MAIL.msg;
+  var btn=m.button==='none'?'':(m.buttonText.trim()||(m.button==='product'?'🐟 Посмотреть товар':MAIL.buttons[m.button]||''));
+  el.innerHTML='<div class="bub">'+(m.image?'<img src="'+esc(m.image)+'" alt="">':'')+'<div class="tx">'+(m.text.trim()?fmtMsg(m.text):'<span style="color:#76838C">Здесь будет текст рассылки</span>')+'</div></div>'+
+    '<div class="kb">'+(btn?'<span>'+esc(btn)+'</span>':'')+'<span>🔕 Не присылать рассылки</span></div>';
+}
+var MST={sending:'Отправляется',done:'Отправлена',stopped:'Остановлена'};
+function drawJobs(){
+  var el=$('jobs'); if(!el) return;
+  if(!MAIL.jobs.length){ el.innerHTML='<div class="empty">Рассылок пока не было</div>'; return; }
+  el.innerHTML=MAIL.jobs.map(function(j){
+    var done=j.total-j.left, pct=j.total?Math.round(done*100/j.total):100;
+    return '<div class="job"><div class="top"><span class="pill '+j.status+'">'+MST[j.status]+'</span><b>'+esc(j.label)+'</b><span class="muted">'+fmtDate(j.at)+'</span><span class="sp" style="flex:1"></span>'+
+      (j.status==='sending'?'<button class="btn danger sm" type="button" data-mstop="'+j.id+'">Остановить</button>':'')+'</div>'+
+      '<div class="tx">'+(j.image?'🖼 ':'')+esc(j.text)+'</div>'+
+      '<div class="prog"><u style="width:'+pct+'%"></u></div>'+
+      '<div class="muted">Доставлено: '+j.sent+' из '+j.total+(j.failed?' · не доставлено: '+j.failed:'')+(j.blocked?' (заблокировали бота: '+j.blocked+')':'')+(j.status==='sending'?' · осталось: '+j.left:'')+'</div></div>';
+  }).join('');
+}
+function mailMsg(){ var m=MAIL.msg; return {text:m.text,image:m.image,button:m.button,buttonText:m.buttonText,productId:+m.productId||0}; }
+document.addEventListener('input',function(e){
+  if(ui.tab!=='mail') return; var t=e.target;
+  if(t.id==='mtext'){ MAIL.msg.text=t.value; MAIL.sure=false; drawPreview(); drawAud(); return; }
+  if(t.id==='mpq'){ MAIL.pq=t.value.trim().toLowerCase(); var pos=t.selectionStart; renderMail(); var q=$('mpq'); q.focus(); q.setSelectionRange(pos,pos); return; }
+  if(t.dataset.mm==='buttonText'){ MAIL.msg.buttonText=t.value; drawPreview(); return; }
+  if(t.dataset.ms && t.tagName==='INPUT'){ MAIL.seg[t.dataset.ms]=+t.value||0; MAIL.sure=false; preview(); }
+});
+document.addEventListener('change',function(e){
+  if(ui.tab!=='mail') return; var t=e.target;
+  if(t.dataset.ms==='kind'){ MAIL.seg.kind=t.value; MAIL.sure=false; renderMail(); preview(); return; }
+  if(t.dataset.mm==='button'||t.dataset.mm==='productId'){ MAIL.msg[t.dataset.mm]=t.value; renderMail(); return; }
+  if(t.dataset.mpk){ var k=t.dataset.mpk, i=MAIL.seg.keys.indexOf(k); if(t.checked&&i<0) MAIL.seg.keys.push(k); if(!t.checked&&i>=0) MAIL.seg.keys.splice(i,1); MAIL.sure=false; preview(); }
+});
+document.addEventListener('click',function(e){
+  if(ui.tab!=='mail') return;
+  var t=e.target.closest('button'); if(!t) return; var d=t.dataset;
+  if(d.mpl){ MAIL.seg.platform=d.mpl; MAIL.sure=false; renderMail(); preview(); return; }
+  if(d.mins){ var ta=$('mtext'), a=ta.selectionStart, b=ta.selectionEnd, ins=d.mins;
+    if(ins==='**жирный**' && b>a) ins='**'+ta.value.slice(a,b)+'**';
+    ta.value=ta.value.slice(0,a)+ins+ta.value.slice(b); MAIL.msg.text=ta.value; ta.focus(); ta.setSelectionRange(a+ins.length,a+ins.length); drawPreview(); return; }
+  if(d.mimg!==undefined){ photoTarget='mail'; $('file').click(); return; }
+  if(d.mimgdel!==undefined){ MAIL.msg.image=''; renderMail(); return; }
+  if(d.mpall!==undefined){ (MAIL.aud||[]).forEach(function(c){ if(c.noNews||c.blocked) return; if(MAIL.seg.platform!=='all'&&c.platform!==MAIL.seg.platform) return; if(MAIL.pq&&(c.name+' '+c.username).toLowerCase().indexOf(MAIL.pq)===-1) return; if(MAIL.seg.keys.indexOf(c.key)<0) MAIL.seg.keys.push(c.key); }); renderMail(); preview(); return; }
+  if(d.mpnone!==undefined){ MAIL.seg.keys=[]; renderMail(); preview(); return; }
+  if(d.mtest!==undefined){ t.disabled=true; api('broadcast/test',{msg:mailMsg()}).then(function(j){ t.disabled=false; toast(j.managers?'Тест отправлен: '+j.sent+' из '+j.managers+' менеджеров':'Нет подключённых менеджеров — подключитесь в боте командой /manager', !j.sent); }).catch(function(x){ t.disabled=false; fail(x); }); return; }
+  if(d.msend!==undefined){
+    if(!MAIL.msg.text.trim()) return toast('Напишите текст рассылки',true);
+    if(MAIL.msg.button==='product'&&!+MAIL.msg.productId) return toast('Выберите товар для кнопки',true);
+    if(!MAIL.sure){ MAIL.sure=true; t.classList.add('danger','sure'); drawAud(); setTimeout(function(){ if(MAIL.sure){ MAIL.sure=false; var b=$('msend'); if(b){ b.classList.remove('danger','sure'); drawAud(); } } },5000); return; }
+    MAIL.sure=false; t.disabled=true;
+    api('broadcast/send',{msg:mailMsg(),segment:MAIL.seg}).then(function(j){
+      MAIL.jobs.unshift(j.job); MAIL.msg={text:'',image:'',button:'shop',buttonText:'',productId:0}; toast('Рассылка запущена: '+j.job.total+' '+P.plural(j.job.total,'получатель','получателя','получателей')); renderMail(); preview(); pollMail();
+    }).catch(function(x){ t.disabled=false; fail(x); });
+    return;
+  }
+  if(d.mstop){ api('broadcast/stop',{id:d.mstop}).then(function(){ return api('broadcasts'); }).then(function(j){ MAIL.jobs=j.broadcasts; drawJobs(); pollMail(); toast('Рассылка остановлена'); }).catch(fail); }
+});
+
 function brandToast(r){
   var bad=[]; ['tg','max'].forEach(function(k){ var x=r&&r[k]; if(!x) return; if(x.error) bad.push((k==='tg'?'Telegram':'MAX')+': '+x.error); else Object.keys(x).forEach(function(f){ if(x[f]!==true && f!=='photo') bad.push((k==='tg'?'Telegram':'MAX')+' '+f+': '+x[f]); if(f==='photo'&&x[f]!==true&&x[f]!==false) bad.push((k==='tg'?'Telegram':'MAX')+' аватар: '+x[f]); }); });
   toast(bad.length?bad.join('; '):'Готово: оформление применено', !!bad.length);
@@ -808,6 +961,7 @@ $('file').addEventListener('change',function(){
     .then(function(j){
       if(photoTarget==='product' && F){ F.image=j.image; drawProduct(); toast('Фото загружено — не забудьте сохранить'); }
       if(photoTarget==='promo' && PF){ PF.image=j.image; drawPromo(); toast('Картинка загружена — не забудьте сохранить'); }
+      if(photoTarget==='mail'){ MAIL.msg.image=j.image; renderMail(); toast('Картинка добавлена'); }
       if(photoTarget==='welcome'){ $('welcome_image').value=j.image; $('wbImg').src=j.image; toast('Картинка загружена — нажмите «Сохранить»'); }
       if(photoTarget==='avatar'){ toast('Ставим аватар…'); api('bot/brand',{avatar:j.image,photo:true}).then(function(r){ S._avatar=j.image; $('avImg').src=j.image; brandToast(r.result); }).catch(fail); }
     }).catch(fail);

@@ -17,6 +17,7 @@ const server = require('./server');
     if ((pl === 'tg' ? config.telegram.mode : config.max.mode) === 'manual') { console.log(`[${pl}] режим manual: подключение — из админки`); continue; }
     await hub.adapters[pl].start().catch(e => console.error(`[${pl}] не запустился:`, e.message));
   }
+  require('./broadcast').resume().catch(() => {}); // недоотправленные рассылки после перезапуска
   // Напоминания о брошенных корзинах — раз в 5 минут
   const reminders = require('./reminders');
   setInterval(() => reminders.run().catch(e => console.error('[reminders]', e.message)), 5 * 60e3).unref();

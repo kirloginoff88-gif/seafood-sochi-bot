@@ -1019,6 +1019,7 @@ loadSdk().then(function(){
   var start = qs.get('tab');
   if(start==='admin'){ if(MANAGER) return openAdmin(); start='account'; }
   go(VIEWS[start] ? start : 'shop');
+  if(start==='fit'){ var sf=$('s-fit'); if(sf) setTimeout(function(){ sf.scrollIntoView({behavior:'smooth'}); },200); }
   if(ses && ses.gift && ses.gift.welcome) giftModal(ses.gift); else popupPromo();
 }).catch(function(){
   $('shop').innerHTML='<div class="empty">Не удалось загрузить каталог. Проверьте интернет и откройте магазин ещё раз.</div>';

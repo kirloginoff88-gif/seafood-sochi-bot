@@ -319,6 +319,7 @@ async function handle(ev, rawCtx) {
   await catalog.sync();
   const u = await store.getUser(ev.platform, ev.user.id);
   u.chatId = String(ev.chatId);
+  if (u.blocked) u.blocked = 0; // вернулся в бота — снова можно писать
   u.name = ev.user.name; u.username = ev.user.username || '';
   const ctx = wrapCtx(u, rawCtx);
   const cartBefore = JSON.stringify(u.cart);
@@ -452,6 +453,8 @@ async function onCallback(u, ev, ctx) {
       return ctx.edit(cardView(u, +a));
     }
     case 'cart': return ctx.reply(cartView(u));
+    case 'unsub': u.noNews = 1; return ctx.reply({ text: '🔕 Готово, рассылки больше не придут. Статусы заказов и ответы менеджера будут приходить как обычно.', buttons: [[{ text: '🔔 Вернуть рассылки', cb: 'sub' }], [{ text: '🐟 Каталог', cb: 'cats' }]] });
+    case 'sub': u.noNews = 0; return ctx.reply({ text: '🔔 Рассылки снова включены: будем присылать акции и свежие поставки.', buttons: [[{ text: '🐟 Каталог', cb: 'cats' }]] });
     case 'clr': u.cart = {}; u.pick = {}; return ctx.edit({ text: 'Корзина очищена.', buttons: [[{ text: '🐟 Каталог', cb: 'cats' }]] });
     case 'dl': return ctx.reply(deliveryView());
     case 'ct': return ctx.reply(contactView());

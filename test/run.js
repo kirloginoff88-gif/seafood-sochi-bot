@@ -838,3 +838,70 @@ test('КБЖУ: справочник, обработка, съедобная ч�
   assert.match(last(c2).text, /Польза вашего заказа[\s\S]*Белок/);
   function byIdFish() { return catalog.get().products.find(x => !x.out && x.unit === 'кг' && !+x.piece_g && x.price > 0).id; }
 });
+
+test('Рассылки: сегменты, отписка, заблокировавшие, отправка порциями, админка', async () => {
+  process.env.BROADCAST_INLINE = '0'; // порции двигаем вручную
+  const bc = require('../src/broadcast');
+  const now = Date.now();
+  await patchUser('tg', '9501', { chatId: '9501', name: 'Олег', orderIds: [1], createdAt: now - 90 * 864e5 });
+  await patchUser('tg', '9502', { chatId: '9502', name: 'Ира', noNews: 1 });
+  await patchUser('max', '9503', { chatId: '9503', name: 'Петя', cart: { 1: 1 }, createdAt: now });
+  await patchUser('tg', '9504', { chatId: '9504', name: 'Блок' });
+
+  const manual = { kind: 'manual', keys: ['tg:9501', 'tg:9502', 'max:9503', 'tg:9504'] };
+  let r = await bc.resolve(manual);
+  assert.equal(r.matched, 4); assert.equal(r.count, 3, 'отписавшимся не пишем'); assert.equal(r.unsub, 1);
+  assert.equal((await bc.resolve({ ...manual, platform: 'max' })).count, 1);
+  assert.ok((await bc.resolve({ kind: 'cart' })).list.some(c => c.key === 'max:9503'));
+  assert.ok(!(await bc.resolve({ kind: 'nobuy' })).list.some(c => c.key === 'tg:9501'));
+  assert.ok((await bc.resolve({ kind: 'new', days: 7 })).list.some(c => c.key === 'max:9503'));
+  assert.ok(!(await bc.resolve({ kind: 'new', days: 7 })).list.some(c => c.key === 'tg:9501'));
+
+  // текст: имя, бонусы, жирный, экранирование; кнопки
+  const v = bc.render({ text: '{name}, **скидка** <15%> · бонусов {bonus}', button: 'sale', image: '/img/x.jpg' }, { name: 'Олег Иванов', balance: 1200 });
+  assert.equal(v.text, 'Олег, <b>скидка</b> &lt;15%&gt; · бонусов 1 200');
+  assert.equal(v.photo, 'https://bot.example.ru/img/x.jpg');
+  assert.deepEqual(v.buttons.flat().map(b => b.app || b.cb), ['sale', 'unsub']);
+
+  // отправка: 9504 заблокировал бота — помечаем и больше не пишем
+  const realSend = hub.adapters.tg.send;
+  hub.adapters.tg.send = async (t, view) => { if (String(t.chatId) === '9504') throw new Error('sendMessage: Forbidden: bot was blocked by the user'); return realSend(t, view); };
+  outbox.length = 0;
+  const job = await bc.create({ text: 'Привет, {name}!', button: 'shop' }, manual);
+  assert.equal(job.total, 3); assert.equal(job.status, 'sending');
+  const done = await bc.step(job.id, 5000);
+  hub.adapters.tg.send = realSend;
+  assert.equal(done.status, 'done'); assert.equal(done.sent, 2); assert.equal(done.failed, 1); assert.equal(done.blocked, 1);
+  assert.deepEqual(outbox.map(m => m.target.chatId).sort(), ['9501', '9503']);
+  assert.match(outbox.find(m => m.target.chatId === '9501').view.text, /Привет, Олег!/);
+  assert.equal((await store.getUser('tg', '9504')).blocked, 1);
+  assert.equal((await bc.resolve(manual)).count, 2);
+  // вернулся в бота — снова в рассылке
+  await say('tg', 9504, 9504, { type: 'text', text: 'привет' });
+  assert.equal((await bc.resolve(manual)).count, 3);
+
+  // кнопка «Не присылать рассылки» и обратно
+  await say('tg', 9501, 9501, { type: 'callback', data: 'unsub' });
+  assert.equal((await store.getUser('tg', '9501')).noNews, 1);
+  await say('tg', 9501, 9501, { type: 'callback', data: 'sub' });
+  assert.equal((await store.getUser('tg', '9501')).noNews, 0);
+
+  // через админку: предпросмотр, тест менеджерам, запуск, остановка, история
+  const { srv, req } = await startServer();
+  try {
+    assert.equal((await req('POST', '/admin/api/login', { password: 'secret-pass' })).status, 200);
+    const pv = (await req('POST', '/admin/api/broadcast/preview', { segment: manual })).body;
+    assert.equal(pv.count, 3); assert.equal(pv.unsub, 1);
+    const empty = await req('POST', '/admin/api/broadcast/send', { msg: { text: '' }, segment: manual });
+    assert.equal(empty.body.ok, false); assert.match(empty.body.error, /текст/);
+    const s = (await req('POST', '/admin/api/broadcast/send', { msg: { text: 'Акция', button: 'none' }, segment: manual })).body;
+    assert.equal(s.ok, true); assert.equal(s.job.total, 3);
+    const st = (await req('POST', '/admin/api/broadcast/stop', { id: s.job.id })).body;
+    assert.equal(st.job.status, 'stopped');
+    const list = (await req('GET', '/admin/api/broadcasts')).body;
+    assert.equal(list.broadcasts[0].id, s.job.id); assert.equal(list.broadcasts[1].status, 'done');
+    assert.ok(list.kinds.sleeping);
+    const aud = (await req('POST', '/admin/api/broadcast/audience', {})).body.audience;
+    assert.ok(aud.find(c => c.key === 'tg:9502').noNews);
+  } finally { srv.close(); delete process.env.BROADCAST_INLINE; }
+});

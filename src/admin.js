@@ -132,6 +132,13 @@ async function handle(req, res, url) {
       const d = await loyalty.get(pl, id);
       return json(res, 200, { ok: true, history: d.history }), true;
     }
+    if (req.method === 'GET' && action === 'broadcasts') {
+      const bc = require('./broadcast');
+      const list = await bc.list(20);
+      const live = list.find(j => j.status === 'sending');
+      if (live && config.serverless) Object.assign(live, await bc.step(live.id, 7000)); // на serverless рассылку двигает открытая админка
+      return json(res, 200, { ok: true, broadcasts: list, kinds: bc.KINDS, buttons: Object.fromEntries(Object.entries(bc.BUTTONS).map(([k, v]) => [k, v ? v.text : 'Без кнопки'])) }), true;
+    }
     if (req.method === 'GET' && action === 'bots') return json(res, 200, { ok: true, ...(await botsStatus()) }), true;
     if (req.method !== 'POST') return json(res, 405, { ok: false }), true;
 
@@ -170,6 +177,14 @@ async function handle(req, res, url) {
         const result = await require('./branding').apply({ photo: !!body.photo });
         return json(res, 200, { ok: true, result, ...(await botsStatus()) }), true;
       }
+      case 'broadcast/preview': {
+        const r = await require('./broadcast').resolve(body.segment || {});
+        return json(res, 200, { ok: true, total: r.total, matched: r.matched, count: r.count, unsub: r.unsub, blocked: r.blocked, byPlatform: r.byPlatform, sample: r.list.slice(0, 8).map(c => ({ name: c.name, username: c.username, platform: c.platform, orders: c.orders })) }), true;
+      }
+      case 'broadcast/audience': return json(res, 200, { ok: true, audience: await require('./broadcast').audience() }), true;
+      case 'broadcast/test': return json(res, 200, { ok: true, ...(await require('./broadcast').test(body.msg || {})) }), true;
+      case 'broadcast/send': return json(res, 200, { ok: true, job: await require('./broadcast').create(body.msg || {}, body.segment || {}) }), true;
+      case 'broadcast/stop': return json(res, 200, { ok: true, job: await require('./broadcast').stop(body.id) }), true;
       case 'reminders/run': return json(res, 200, { ok: true, ...(await require('./reminders').run({ force: !!body.force })) }), true;
       case 'settings/save': await catalog.saveSettings(body.settings || {}); return json(res, 200, { ok: true, ...adminState() }), true;
       case 'upload': {
